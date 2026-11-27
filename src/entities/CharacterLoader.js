@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
+import { clone as cloneSkeleton } from 'three/examples/jsm/utils/SkeletonUtils.js';
 
 /**
  * Default asset paths for selectable duo characters.
@@ -82,6 +83,7 @@ export function createProceduralChar1() {
   });
 
   const torso = new THREE.Group();
+  torso.name = 'torso';
   torso.position.y = 1.05;
 
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.32), armorMat);
@@ -95,6 +97,7 @@ export function createProceduralChar1() {
   torso.add(chest, core, pack, thruster);
 
   const head = new THREE.Group();
+  head.name = 'head';
   head.position.y = 0.48;
   const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), armorMat);
   const visor = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), visorMat);
@@ -103,14 +106,18 @@ export function createProceduralChar1() {
   torso.add(head);
 
   const leftArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
+  leftArm.name = 'leftArm';
   leftArm.position.set(-0.39, 0.22, 0);
   const rightArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
+  rightArm.name = 'rightArm';
   rightArm.position.set(0.39, 0.22, 0);
   torso.add(leftArm, rightArm);
 
   const leftLeg = createLimb(0.2, 0.68, 0.22, suitMat, -0.34);
+  leftLeg.name = 'leftLeg';
   leftLeg.position.set(-0.15, 0.72, 0);
   const rightLeg = createLimb(0.2, 0.68, 0.22, suitMat, -0.34);
+  rightLeg.name = 'rightLeg';
   rightLeg.position.set(0.15, 0.72, 0);
 
   const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.32), armorMat);
@@ -156,6 +163,7 @@ export function createProceduralChar2() {
   });
 
   const torso = new THREE.Group();
+  torso.name = 'torso';
   torso.position.y = 1.08;
 
   const chest = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.66, 0.38), armorMat);
@@ -176,6 +184,7 @@ export function createProceduralChar2() {
   torso.add(chest, chestPlate, pack);
 
   const head = new THREE.Group();
+  head.name = 'head';
   head.position.y = 0.51;
   const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.36, 0.38), suitMat);
   const crest = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.42), armorMat);
@@ -186,12 +195,14 @@ export function createProceduralChar2() {
   torso.add(head);
 
   const leftArm = createLimb(0.2, 0.54, 0.2, suitMat, -0.24);
+  leftArm.name = 'leftArm';
   leftArm.position.set(-0.46, 0.22, 0);
   const leftPauldron = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), armorMat);
   leftPauldron.position.y = 0.02;
   leftArm.add(leftPauldron);
 
   const rightArm = createLimb(0.2, 0.54, 0.2, suitMat, -0.24);
+  rightArm.name = 'rightArm';
   rightArm.position.set(0.46, 0.22, 0);
   const rightPauldron = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), armorMat);
   rightPauldron.position.y = 0.02;
@@ -200,8 +211,10 @@ export function createProceduralChar2() {
   torso.add(leftArm, rightArm);
 
   const leftLeg = createLimb(0.23, 0.7, 0.25, suitMat, -0.35);
+  leftLeg.name = 'leftLeg';
   leftLeg.position.set(-0.18, 0.74, 0);
   const rightLeg = createLimb(0.23, 0.7, 0.25, suitMat, -0.35);
+  rightLeg.name = 'rightLeg';
   rightLeg.position.set(0.18, 0.74, 0);
 
   const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.36), armorMat);
@@ -247,6 +260,24 @@ function createMinimalFallback(characterId) {
 }
 
 /**
+ * Re-binds named procedural joints after cloning a character template.
+ * @param {THREE.Object3D} root
+ */
+function rebindJoints(root) {
+  const jointNames = ['torso', 'head', 'leftArm', 'rightArm', 'leftLeg', 'rightLeg'];
+  const joints = {};
+  for (const name of jointNames) {
+    const node = root.getObjectByName(name);
+    if (node) {
+      joints[name] = node;
+    }
+  }
+  if (Object.keys(joints).length > 0) {
+    root.userData.joints = joints;
+  }
+}
+
+/**
  * Loads selectable .glb character models with graceful procedural fallback support.
  */
 export class CharacterLoader {
@@ -266,6 +297,8 @@ export class CharacterLoader {
     this.loader = loader;
     this.paths = { ...paths };
     this.fallbackBuilder = fallbackBuilder;
+    this._cache = new Map();
+    this._pendingLoads = new Map();
   }
 
   /**
@@ -277,11 +310,81 @@ export class CharacterLoader {
   }
 
   /**
-   * Loads a character's GLB model or returns a procedural fallback if the file is unavailable.
+   * Clones a cached character entry safely (preserving skeletons and procedural joints).
+   * @param {{id: string, template: THREE.Object3D, animations: THREE.AnimationClip[], isFallback: boolean}} entry
+   * @returns {{id: string, model: THREE.Object3D, animations: THREE.AnimationClip[], isFallback: boolean}}
+   */
+  cloneCharacter(entry) {
+    const clonedModel = cloneSkeleton(entry.template);
+    rebindJoints(clonedModel);
+    enableShadows(clonedModel);
+
+    return {
+      id: entry.id,
+      model: clonedModel,
+      animations: entry.animations,
+      isFallback: entry.isFallback,
+    };
+  }
+
+  /**
+   * Returns true when a character template is already cached.
+   * @param {string} characterId
+   * @returns {boolean}
+   */
+  hasCached(characterId) {
+    return this._cache.has(characterId);
+  }
+
+  /**
+   * Clears cached character templates.
+   */
+  clearCache() {
+    this._cache.clear();
+  }
+
+  /**
+   * Preloads a list of character IDs into the template cache.
+   * @param {string[]} [characterIds=['char1', 'char2']]
+   * @returns {Promise<Array>}
+   */
+  async preloadAll(characterIds = ['char1', 'char2']) {
+    return Promise.all(characterIds.map((id) => this.load(id)));
+  }
+
+  /**
+   * Loads a character's GLB model or procedural fallback, using cache and returning a fresh clone.
    * @param {string} [characterId='char1']
    * @returns {Promise<{id: string, model: THREE.Object3D, animations: THREE.AnimationClip[], isFallback: boolean}>}
    */
   async load(characterId = 'char1') {
+    if (this._cache.has(characterId)) {
+      return this.cloneCharacter(this._cache.get(characterId));
+    }
+
+    if (!this._pendingLoads.has(characterId)) {
+      const loadPromise = this._fetchOrBuildTemplate(characterId)
+        .then((entry) => {
+          this._cache.set(characterId, entry);
+          return entry;
+        })
+        .finally(() => {
+          this._pendingLoads.delete(characterId);
+        });
+      this._pendingLoads.set(characterId, loadPromise);
+    }
+
+    const entry = await this._pendingLoads.get(characterId);
+    return this.cloneCharacter(entry);
+  }
+
+  /**
+   * Resolves the template model from GLB or procedural fallback.
+   * @param {string} characterId
+   * @returns {Promise<{id: string, template: THREE.Object3D, animations: THREE.AnimationClip[], isFallback: boolean}>}
+   * @private
+   */
+  async _fetchOrBuildTemplate(characterId) {
     const relativePath = this.paths[characterId];
     if (relativePath && typeof fetch === 'function') {
       const url = resolveAssetUrl(relativePath);
@@ -294,7 +397,7 @@ export class CharacterLoader {
           enableShadows(gltf.scene);
           return {
             id: characterId,
-            model: gltf.scene,
+            template: gltf.scene,
             animations: gltf.animations || [],
             isFallback: false,
           };
@@ -313,7 +416,7 @@ export class CharacterLoader {
 
     return {
       id: characterId,
-      model: fallbackModel,
+      template: fallbackModel,
       animations: [],
       isFallback: true,
     };
