@@ -128,6 +128,9 @@ export function createEngine({
  * Application entry point for Duo 3D Runner.
  */
 export function initApp() {
+  if (typeof document === 'undefined') {
+    return null;
+  }
   const canvas = document.getElementById('game-canvas');
   if (!canvas) {
     return null;
