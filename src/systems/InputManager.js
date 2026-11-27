@@ -38,6 +38,8 @@ export class InputManager {
       swipeThreshold = 28,
       doubleTapWindowMs = 280,
       doubleTapAction = 'dash',
+      gamepadDeadzone = 0.45,
+      getGamepads = null,
     } = options;
 
     this.target = target;
@@ -48,12 +50,21 @@ export class InputManager {
     this.swipeThreshold = swipeThreshold;
     this.doubleTapWindowMs = doubleTapWindowMs;
     this.doubleTapAction = doubleTapAction;
+    this.gamepadDeadzone = gamepadDeadzone;
+    this._getGamepads =
+      typeof getGamepads === 'function'
+        ? getGamepads
+        : () =>
+            typeof navigator !== 'undefined' && typeof navigator.getGamepads === 'function'
+              ? navigator.getGamepads()
+              : [];
     this.bindings = {};
     this._codeToAction = new Map();
     this._pressedCodes = new Set();
     this._pressedActions = new Set();
     this._listeners = new Map();
     this._actionBuffer = new Map();
+    this._prevGamepadState = new Set();
     this._touchStart = null;
     this._swipeTriggered = false;
     this._lastTapTimeMs = 0;
@@ -174,7 +185,7 @@ export class InputManager {
   }
 
   /**
-   * Advances buffer timers; call once per frame.
+   * Advances buffer timers and polls connected standard gamepads; call once per frame.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
@@ -187,6 +198,63 @@ export class InputManager {
         this._actionBuffer.set(action, next);
       }
     }
+
+    this.pollGamepads();
+  }
+
+  /**
+   * Polls connected standard gamepads with deadzone handling and edge-triggered emits.
+   */
+  pollGamepads() {
+    if (this._disposed) {
+      return;
+    }
+
+    const pads = this._getGamepads();
+    if (!pads) {
+      return;
+    }
+
+    const activePad = Array.from(pads).find((pad) => pad && pad.connected);
+    const current = new Set();
+
+    if (activePad) {
+      const axes = activePad.axes || [];
+      const buttons = activePad.buttons || [];
+      const isPressed = (idx) => Boolean(buttons[idx]?.pressed);
+      const axisX = axes[0] ?? 0;
+      const axisY = axes[1] ?? 0;
+
+      if (axisX <= -this.gamepadDeadzone || isPressed(14)) {
+        current.add('left');
+      }
+      if (axisX >= this.gamepadDeadzone || isPressed(15)) {
+        current.add('right');
+      }
+      if (axisY <= -this.gamepadDeadzone || isPressed(0) || isPressed(12)) {
+        current.add('jump');
+      }
+      if (axisY >= this.gamepadDeadzone || isPressed(1) || isPressed(13)) {
+        current.add('slide');
+      }
+      if (isPressed(2) || isPressed(7)) {
+        current.add('dash');
+      }
+      if (isPressed(3) || isPressed(5)) {
+        current.add('swap');
+      }
+      if (isPressed(9)) {
+        current.add('pause');
+      }
+    }
+
+    for (const action of current) {
+      if (!this._prevGamepadState.has(action)) {
+        this.emit(action, { source: 'gamepad' });
+      }
+    }
+
+    this._prevGamepadState = current;
   }
 
   /**
