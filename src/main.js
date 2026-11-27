@@ -125,6 +125,71 @@ export function createEngine({
 }
 
 /**
+ * Connects InputManager actions and continuous arena directional input to the Player controller.
+ * @param {object} params
+ * @param {InputManager} params.inputManager
+ * @param {Player} params.player
+ * @param {GameLoop} params.loop
+ * @param {CameraController} params.cameraController
+ * @returns {{ update: (dt: number) => void, unbind: () => void }}
+ */
+export function bindPlayerControls({ inputManager, player, loop, cameraController }) {
+  const unsubs = [
+    inputManager.on('left', () => {
+      if (player.getMovementMode() === 'runner') {
+        player.moveLeft();
+      }
+    }),
+    inputManager.on('right', () => {
+      if (player.getMovementMode() === 'runner') {
+        player.moveRight();
+      }
+    }),
+    inputManager.on('jump', () => {
+      if (player.getMovementMode() === 'runner' && player.jump()) {
+        inputManager.consumeBufferedAction('jump');
+      }
+    }),
+    inputManager.on('slide', () => {
+      if (player.getMovementMode() === 'runner') {
+        player.slide();
+      }
+    }),
+    inputManager.on('dash', () => player.dash()),
+    inputManager.on('swap', () => player.swapCharacter()),
+    inputManager.on('pause', () => loop.togglePause()),
+  ];
+
+  const update = (dt) => {
+    inputManager.update(dt);
+
+    if (player.getMovementMode() === 'arena') {
+      const moveX =
+        (inputManager.isActionPressed('right') ? 1 : 0) -
+        (inputManager.isActionPressed('left') ? 1 : 0);
+      const moveZ =
+        (inputManager.isActionPressed('slide') ? 1 : 0) -
+        (inputManager.isActionPressed('jump') ? 1 : 0);
+      player.setMoveInput(moveX, moveZ);
+    } else if (player.isGrounded && inputManager.consumeBufferedAction('jump')) {
+      player.jump();
+    }
+
+    player.update(dt);
+    const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
+    cameraController.setFovBoost(fovBoost);
+  };
+
+  const unbind = () => {
+    for (const off of unsubs) {
+      off();
+    }
+  };
+
+  return { update, unbind };
+}
+
+/**
  * Application entry point for Duo 3D Runner.
  */
 export function initApp() {
@@ -180,17 +245,12 @@ export function initApp() {
     );
   });
 
-  inputManager.on('left', () => player.moveLeft());
-  inputManager.on('right', () => player.moveRight());
-  inputManager.on('jump', () => {
-    if (player.jump()) {
-      inputManager.consumeBufferedAction('jump');
-    }
+  const controls = bindPlayerControls({
+    inputManager,
+    player,
+    loop,
+    cameraController,
   });
-  inputManager.on('slide', () => player.slide());
-  inputManager.on('dash', () => player.dash());
-  inputManager.on('swap', () => player.swapCharacter());
-  inputManager.on('pause', () => loop.togglePause());
 
   const handlePreviewKeys = (event) => {
     if (event.repeat) {
@@ -202,6 +262,10 @@ export function initApp() {
     } else if (event.code === 'KeyC') {
       modeIndex = (modeIndex + 1) % CAMERA_MODE_NAMES.length;
       cameraController.setMode(CAMERA_MODE_NAMES[modeIndex]);
+    } else if (event.code === 'KeyM') {
+      const nextMode = player.getMovementMode() === 'runner' ? 'arena' : 'runner';
+      player.setMovementMode(nextMode);
+      cameraController.setMode(nextMode);
     } else if (event.code === 'KeyG') {
       qualityIndex = (qualityIndex + 1) % QUALITY_NAMES.length;
       engine.setQuality(QUALITY_NAMES[qualityIndex]);
@@ -217,21 +281,12 @@ export function initApp() {
   window.addEventListener('keydown', handlePreviewKeys);
 
   engine.addUpdateHook((dt) => {
-    inputManager.update(dt);
+    controls.update(dt);
 
-    if (player.isGrounded && inputManager.consumeBufferedAction('jump')) {
-      player.jump();
-    }
-
-    player.update(dt);
-
-    const activeSpeed = player.getEffectiveForwardSpeed();
+    const activeSpeed = player.getMovementMode() === 'runner' ? player.getEffectiveForwardSpeed() : 0;
     const gridStep = 140 / 46;
     gridOffset = (gridOffset + activeSpeed * dt) % gridStep;
     stage.grid.position.z = -45 + gridOffset;
-
-    const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
-    cameraController.setFovBoost(fovBoost);
   });
 
   loop.start();
@@ -248,6 +303,7 @@ export function initApp() {
     loop,
     dispose: () => {
       window.removeEventListener('keydown', handlePreviewKeys);
+      controls.unbind();
       inputManager.dispose();
       engine.dispose();
     },
