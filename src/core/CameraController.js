@@ -66,7 +66,12 @@ export class CameraController {
     this._desiredPosition = new THREE.Vector3();
     this._currentLookAt = new THREE.Vector3();
     this._desiredLookAt = new THREE.Vector3();
+    this._focusPoint = new THREE.Vector3();
+    this._rotatedOffset = new THREE.Vector3();
     this._target = null;
+    this._secondaryTarget = null;
+    this._arenaMaxFollowRadius = 8;
+    this._orbitAngle = 0;
 
     this._trauma = 0;
     this._shakeDecay = 2.4;
@@ -92,6 +97,62 @@ export class CameraController {
     if (snap && target) {
       this.snapTo(target);
     }
+  }
+
+  /**
+   * Sets an optional secondary target (e.g., partner or arena anchor) to frame midpoint.
+   * @param {THREE.Object3D|{position: THREE.Vector3}|null} target
+   */
+  setSecondaryTarget(target) {
+    this._secondaryTarget = target;
+  }
+
+  /**
+   * Configures circular follow clamping and optional orbit angle for arena mode.
+   * @param {{maxRadius?: number, orbitAngle?: number}} config
+   */
+  setArenaFollowBounds({ maxRadius, orbitAngle } = {}) {
+    if (typeof maxRadius === 'number') {
+      this._arenaMaxFollowRadius = Math.max(1, maxRadius);
+    }
+    if (typeof orbitAngle === 'number') {
+      this._orbitAngle = orbitAngle;
+    }
+  }
+
+  /**
+   * Rotates the arena camera orbit angle by delta radians.
+   * @param {number} deltaRadians
+   */
+  rotateOrbit(deltaRadians) {
+    this._orbitAngle += deltaRadians;
+  }
+
+  /**
+   * Computes the framed focus point (midpoint if secondary target set, clamped in arena mode).
+   * @param {THREE.Vector3} rawPos
+   * @returns {THREE.Vector3}
+   * @private
+   */
+  _computeFocusPoint(rawPos) {
+    this._focusPoint.copy(rawPos);
+    const secondPos = this._secondaryTarget?.position;
+    if (secondPos) {
+      this._focusPoint.add(secondPos).multiplyScalar(0.5);
+    }
+
+    if (this._mode === 'arena') {
+      const horizDistSq =
+        this._focusPoint.x * this._focusPoint.x + this._focusPoint.z * this._focusPoint.z;
+      const maxR = this._arenaMaxFollowRadius;
+      if (horizDistSq > maxR * maxR) {
+        const horizDist = Math.sqrt(horizDistSq);
+        this._focusPoint.x = (this._focusPoint.x / horizDist) * maxR;
+        this._focusPoint.z = (this._focusPoint.z / horizDist) * maxR;
+      }
+    }
+
+    return this._focusPoint;
   }
 
   /**
@@ -158,15 +219,26 @@ export class CameraController {
     this.offset.lerp(this._targetOffset, alpha);
     this.lookOffset.lerp(this._targetLookOffset, alpha);
 
+    const focus = this._computeFocusPoint(pos);
+    this._rotatedOffset.copy(this.offset);
+    if (this._mode === 'arena' && this._orbitAngle !== 0) {
+      const cos = Math.cos(this._orbitAngle);
+      const sin = Math.sin(this._orbitAngle);
+      const rx = this._rotatedOffset.x * cos - this._rotatedOffset.z * sin;
+      const rz = this._rotatedOffset.x * sin + this._rotatedOffset.z * cos;
+      this._rotatedOffset.x = rx;
+      this._rotatedOffset.z = rz;
+    }
+
     this._desiredPosition.set(
-      pos.x + this.offset.x,
-      pos.y + this.offset.y,
-      pos.z + this.offset.z,
+      focus.x + this._rotatedOffset.x,
+      focus.y + this._rotatedOffset.y,
+      focus.z + this._rotatedOffset.z,
     );
     this._desiredLookAt.set(
-      pos.x + this.lookOffset.x,
-      pos.y + this.lookOffset.y,
-      pos.z + this.lookOffset.z,
+      focus.x + this.lookOffset.x,
+      focus.y + this.lookOffset.y,
+      focus.z + this.lookOffset.z,
     );
 
     this._basePosition.lerp(this._desiredPosition, alpha);
