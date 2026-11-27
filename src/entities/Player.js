@@ -31,6 +31,9 @@ export class Player {
       maxJumps = 2,
       coyoteTime = 0.1,
       groundY = 0,
+      slideDuration = 0.6,
+      slideHeightRatio = 0.48,
+      fastFallVelocity = -18,
       onLand = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
     } = options;
@@ -45,15 +48,22 @@ export class Player {
     this.maxJumps = maxJumps;
     this.coyoteTime = coyoteTime;
     this.groundY = groundY;
+    this.slideDuration = slideDuration;
+    this.slideHeightRatio = slideHeightRatio;
+    this.fastFallVelocity = fastFallVelocity;
     this.onLand = onLand;
 
     this.isGrounded = true;
     this.jumpsUsed = 0;
     this._coyoteTimer = 0;
+    this.isSliding = false;
+    this._slideTimer = 0;
+    this._pendingSlideOnLand = false;
 
+    this._baseColliderHeight = colliderSize.height ?? PLAYER_COLLIDER_DEFAULTS.height;
     this.colliderSize = {
       width: colliderSize.width ?? PLAYER_COLLIDER_DEFAULTS.width,
-      height: colliderSize.height ?? PLAYER_COLLIDER_DEFAULTS.height,
+      height: this._baseColliderHeight,
       depth: colliderSize.depth ?? PLAYER_COLLIDER_DEFAULTS.depth,
     };
 
@@ -170,11 +180,13 @@ export class Player {
 
   /**
    * Triggers a primary jump (including coyote window) or an aerial double-jump.
+   * Cancels any active slide state for responsive jump-out-of-slide control.
    * @returns {boolean} True if a jump was executed
    */
   jump() {
     const canCoyoteJump = !this.isGrounded && this.jumpsUsed === 0 && this._coyoteTimer > 0;
     if (this.isGrounded || canCoyoteJump) {
+      this._endSlide();
       this.velocity.y = this.jumpForce;
       this.isGrounded = false;
       this.jumpsUsed = 1;
@@ -183,6 +195,7 @@ export class Player {
     }
 
     if (this.jumpsUsed < this.maxJumps) {
+      this._endSlide();
       this.velocity.y = this.doubleJumpForce;
       this.jumpsUsed += 1;
       return true;
@@ -192,7 +205,36 @@ export class Player {
   }
 
   /**
-   * Advances lateral lane interpolation, jump gravity, and banking tilt.
+   * Initiates a timed slide with lowered collider height, or a fast-fall into slide if airborne.
+   * @returns {boolean} True if slide or fast-fall began
+   */
+  slide() {
+    if (this.isGrounded) {
+      this.isSliding = true;
+      this._slideTimer = this.slideDuration;
+      this.colliderSize.height = this._baseColliderHeight * this.slideHeightRatio;
+      return true;
+    }
+
+    this._pendingSlideOnLand = true;
+    if (this.velocity.y > this.fastFallVelocity) {
+      this.velocity.y = this.fastFallVelocity;
+    }
+    return true;
+  }
+
+  /**
+   * @private
+   */
+  _endSlide() {
+    this.isSliding = false;
+    this._slideTimer = 0;
+    this._pendingSlideOnLand = false;
+    this.colliderSize.height = this._baseColliderHeight;
+  }
+
+  /**
+   * Advances lateral lane interpolation, jump gravity, slide timer, and banking tilt.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
@@ -218,20 +260,33 @@ export class Player {
         this.isGrounded = true;
         this.jumpsUsed = 0;
         this._coyoteTimer = this.coyoteTime;
+        if (this._pendingSlideOnLand) {
+          this._pendingSlideOnLand = false;
+          this.slide();
+        }
         if (typeof this.onLand === 'function') {
           this.onLand(impactVelocity);
         }
       }
     }
 
+    if (this.isSliding) {
+      this._slideTimer -= safeDt;
+      if (this._slideTimer <= 0) {
+        this._endSlide();
+      }
+    }
+
     if (this.model) {
       const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
       this.model.rotation.z += (targetBank - this.model.rotation.z) * alpha;
+      const targetScaleY = this.isSliding ? 0.55 : 1;
+      this.model.scale.y += (targetScaleY - this.model.scale.y) * Math.min(1, safeDt * 18);
     }
   }
 
   /**
-   * Resets player position, jump state, and lane state to center spawn.
+   * Resets player position, jump state, slide state, and lane state to center spawn.
    */
   reset() {
     this.laneIndex = this._clampLaneIndex(Math.floor(this.lanes.length / 2));
@@ -240,8 +295,10 @@ export class Player {
     this.isGrounded = true;
     this.jumpsUsed = 0;
     this._coyoteTimer = this.coyoteTime;
+    this._endSlide();
     if (this.model) {
       this.model.rotation.z = 0;
+      this.model.scale.y = 1;
     }
   }
 }
