@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { SceneManager, SCENE_PRESETS } from './core/SceneManager.js';
+import { SceneManager, SCENE_PRESETS, QUALITY_TIERS } from './core/SceneManager.js';
 import { CameraController, CAMERA_MODES } from './core/CameraController.js';
 import { Lighting } from './core/Lighting.js';
 import { GameLoop } from './core/GameLoop.js';
@@ -9,6 +9,7 @@ import { InputManager } from './systems/InputManager.js';
 
 const THEME_NAMES = Object.keys(SCENE_PRESETS);
 const CAMERA_MODE_NAMES = Object.keys(CAMERA_MODES);
+const QUALITY_NAMES = Object.keys(QUALITY_TIERS);
 
 /**
  * Creates a starter 3-lane neon runner stage for the live 3D scene preview.
@@ -51,6 +52,79 @@ function createStarterStage() {
 }
 
 /**
+ * Assembles the core 3D engine subsystems (SceneManager, CameraController, Lighting, GameLoop).
+ * @param {object} options
+ * @param {HTMLCanvasElement} options.canvas
+ * @param {string} [options.preset='neonNight']
+ * @param {string} [options.quality='high']
+ * @param {string} [options.cameraMode='runner']
+ * @returns {object}
+ */
+export function createEngine({
+  canvas,
+  preset = 'neonNight',
+  quality = 'high',
+  cameraMode = 'runner',
+}) {
+  const sceneManager = new SceneManager({ canvas, preset, quality });
+  const cameraController = new CameraController({ mode: cameraMode });
+  const lighting = new Lighting(sceneManager.getScene(), { theme: preset });
+  const updateHooks = new Set();
+  let followTarget = null;
+
+  sceneManager.setResizeCallback((width, height) => {
+    cameraController.setAspect(width, height);
+  });
+  if (typeof window !== 'undefined') {
+    cameraController.setAspect(window.innerWidth, window.innerHeight);
+  }
+
+  const loop = new GameLoop({
+    onUpdate: (dt, elapsed) => {
+      for (const hook of updateHooks) {
+        hook(dt, elapsed);
+      }
+      sceneManager.updateAtmosphere(dt);
+      cameraController.update(dt);
+      if (followTarget?.position) {
+        lighting.updateFollow(followTarget.position);
+      }
+    },
+    onRender: () => {
+      sceneManager.render(cameraController.getCamera());
+    },
+  });
+
+  return {
+    sceneManager,
+    cameraController,
+    lighting,
+    loop,
+    setFollowTarget: (target, snap = false) => {
+      followTarget = target;
+      cameraController.setTarget(target, snap);
+    },
+    setBiome: (themeName, transitionDuration = 0.8) => {
+      sceneManager.setAtmospherePreset(themeName, transitionDuration);
+      lighting.setTheme(themeName);
+    },
+    setQuality: (tierName) => {
+      sceneManager.setQualityTier(tierName);
+    },
+    addUpdateHook: (fn) => {
+      updateHooks.add(fn);
+      return () => updateHooks.delete(fn);
+    },
+    dispose: () => {
+      updateHooks.clear();
+      loop.dispose();
+      lighting.dispose();
+      sceneManager.dispose();
+    },
+  };
+}
+
+/**
  * Application entry point for Duo 3D Runner.
  */
 export function initApp() {
@@ -59,16 +133,10 @@ export function initApp() {
     return null;
   }
 
-  const sceneManager = new SceneManager({ canvas, preset: 'neonNight' });
-  const cameraController = new CameraController({ mode: 'runner' });
-  const lighting = new Lighting(sceneManager.getScene(), { theme: 'neonNight' });
+  const engine = createEngine({ canvas });
+  const { sceneManager, cameraController, lighting, loop } = engine;
   const characterLoader = new CharacterLoader();
   const inputManager = new InputManager();
-
-  sceneManager.setResizeCallback((width, height) => {
-    cameraController.setAspect(width, height);
-  });
-  cameraController.setAspect(window.innerWidth, window.innerHeight);
 
   const stage = createStarterStage();
   sceneManager.add(stage.group);
@@ -85,10 +153,11 @@ export function initApp() {
   });
 
   sceneManager.add(player.getObject3D());
-  cameraController.setTarget(player.getObject3D(), true);
+  engine.setFollowTarget(player.getObject3D(), true);
 
   let themeIndex = 0;
   let modeIndex = 0;
+  let qualityIndex = QUALITY_NAMES.indexOf(sceneManager.getQualityTier());
   let gridOffset = 0;
 
   characterLoader.preloadAll(['char1', 'char2']).then(([char1Entry, char2Entry]) => {
@@ -126,12 +195,13 @@ export function initApp() {
     }
     if (event.code === 'KeyT') {
       themeIndex = (themeIndex + 1) % THEME_NAMES.length;
-      const nextTheme = THEME_NAMES[themeIndex];
-      sceneManager.setAtmospherePreset(nextTheme, 0.8);
-      lighting.setTheme(nextTheme);
+      engine.setBiome(THEME_NAMES[themeIndex], 0.8);
     } else if (event.code === 'KeyC') {
       modeIndex = (modeIndex + 1) % CAMERA_MODE_NAMES.length;
       cameraController.setMode(CAMERA_MODE_NAMES[modeIndex]);
+    } else if (event.code === 'KeyG') {
+      qualityIndex = (qualityIndex + 1) % QUALITY_NAMES.length;
+      engine.setQuality(QUALITY_NAMES[qualityIndex]);
     } else if (event.code === 'KeyB') {
       if (player.hasShield) {
         player.clearShield();
@@ -143,37 +213,29 @@ export function initApp() {
 
   window.addEventListener('keydown', handlePreviewKeys);
 
-  const loop = new GameLoop({
-    onUpdate: (dt) => {
-      inputManager.update(dt);
+  engine.addUpdateHook((dt) => {
+    inputManager.update(dt);
 
-      if (player.isGrounded && inputManager.consumeBufferedAction('jump')) {
-        player.jump();
-      }
+    if (player.isGrounded && inputManager.consumeBufferedAction('jump')) {
+      player.jump();
+    }
 
-      player.update(dt);
+    player.update(dt);
 
-      const activeSpeed = player.getEffectiveForwardSpeed();
-      const gridStep = 140 / 46;
-      gridOffset = (gridOffset + activeSpeed * dt) % gridStep;
-      stage.grid.position.z = -45 + gridOffset;
+    const activeSpeed = player.getEffectiveForwardSpeed();
+    const gridStep = 140 / 46;
+    gridOffset = (gridOffset + activeSpeed * dt) % gridStep;
+    stage.grid.position.z = -45 + gridOffset;
 
-      const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
-      cameraController.setFovBoost(fovBoost);
-
-      sceneManager.updateAtmosphere(dt);
-      cameraController.update(dt);
-      lighting.updateFollow(player.position);
-    },
-    onRender: () => {
-      sceneManager.render(cameraController.getCamera());
-    },
+    const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
+    cameraController.setFovBoost(fovBoost);
   });
 
   loop.start();
 
   return {
     canvas,
+    engine,
     sceneManager,
     cameraController,
     lighting,
@@ -184,9 +246,7 @@ export function initApp() {
     dispose: () => {
       window.removeEventListener('keydown', handlePreviewKeys);
       inputManager.dispose();
-      loop.dispose();
-      lighting.dispose();
-      sceneManager.dispose();
+      engine.dispose();
     },
   };
 }
