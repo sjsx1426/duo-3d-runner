@@ -40,6 +40,8 @@ export class InputManager {
       doubleTapAction = 'dash',
       gamepadDeadzone = 0.45,
       getGamepads = null,
+      storageKey = 'duo-3d-runner:keybindings',
+      storage = null,
     } = options;
 
     this.target = target;
@@ -51,6 +53,9 @@ export class InputManager {
     this.doubleTapWindowMs = doubleTapWindowMs;
     this.doubleTapAction = doubleTapAction;
     this.gamepadDeadzone = gamepadDeadzone;
+    this.storageKey = storageKey;
+    this._storage =
+      storage || (typeof localStorage !== 'undefined' ? localStorage : null);
     this._getGamepads =
       typeof getGamepads === 'function'
         ? getGamepads
@@ -70,7 +75,8 @@ export class InputManager {
     this._lastTapTimeMs = 0;
     this._disposed = false;
 
-    this.setBindings(bindings);
+    const initialBindings = options.bindings ? bindings : this.loadBindings() || bindings;
+    this.setBindings(initialBindings);
 
     this._onKeyDown = (event) => this.handleKeyDown(event);
     this._onKeyUp = (event) => this.handleKeyUp(event);
@@ -107,6 +113,104 @@ export class InputManager {
       for (const code of codeList) {
         this._codeToAction.set(code, action);
       }
+    }
+  }
+
+  /**
+   * Returns a cloned copy of the active bindings map.
+   * @returns {Record<string, string[]>}
+   */
+  getBindings() {
+    const copy = {};
+    for (const [action, codes] of Object.entries(this.bindings)) {
+      copy[action] = [...codes];
+    }
+    return copy;
+  }
+
+  /**
+   * Rebinds an action to one or more key codes and persists to storage.
+   * @param {string} action
+   * @param {string|string[]} codes
+   * @param {boolean} [exclusive=true] Removes conflicting codes from other actions
+   */
+  rebindAction(action, codes, exclusive = true) {
+    const nextCodes = Array.isArray(codes) ? [...codes] : [codes];
+    const cleanCodes = nextCodes.filter((c) => typeof c === 'string' && c.length > 0);
+    if (cleanCodes.length === 0) {
+      return;
+    }
+
+    const updated = this.getBindings();
+    if (exclusive) {
+      const claimSet = new Set(cleanCodes);
+      for (const [otherAction, otherCodes] of Object.entries(updated)) {
+        if (otherAction !== action) {
+          updated[otherAction] = otherCodes.filter((c) => !claimSet.has(c));
+        }
+      }
+    }
+
+    updated[action] = cleanCodes;
+    this.setBindings(updated);
+    this.saveBindings();
+  }
+
+  /**
+   * Resets all keybindings back to DEFAULT_BINDINGS and persists the reset.
+   */
+  resetBindings() {
+    this.setBindings(DEFAULT_BINDINGS);
+    this.saveBindings();
+  }
+
+  /**
+   * Serializes current keybindings to storage.
+   * @returns {boolean} True if persisted
+   */
+  saveBindings() {
+    if (!this._storage || typeof this._storage.setItem !== 'function') {
+      return false;
+    }
+    try {
+      this._storage.setItem(this.storageKey, JSON.stringify(this.bindings));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Loads saved keybindings from storage, merging safely with DEFAULT_BINDINGS.
+   * @returns {Record<string, string[]>|null}
+   */
+  loadBindings() {
+    if (!this._storage || typeof this._storage.getItem !== 'function') {
+      return null;
+    }
+    try {
+      const raw = this._storage.getItem(this.storageKey);
+      if (!raw) {
+        return null;
+      }
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') {
+        return null;
+      }
+      const merged = {};
+      for (const action of Object.keys(DEFAULT_BINDINGS)) {
+        merged[action] = Array.isArray(parsed[action])
+          ? parsed[action].filter((c) => typeof c === 'string')
+          : [...DEFAULT_BINDINGS[action]];
+      }
+      for (const [action, codes] of Object.entries(parsed)) {
+        if (!merged[action] && Array.isArray(codes)) {
+          merged[action] = codes.filter((c) => typeof c === 'string');
+        }
+      }
+      return merged;
+    } catch {
+      return null;
     }
   }
 
