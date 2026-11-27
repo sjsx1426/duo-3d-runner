@@ -8,6 +8,36 @@ export const PLAYER_COLLIDER_DEFAULTS = {
 };
 
 /**
+ * Distinct gameplay stat profiles for Character 1 and Character 2.
+ */
+export const CHARACTER_PROFILES = {
+  char1: {
+    id: 'char1',
+    name: 'Volt Runner',
+    role: 'Agile Acrobat',
+    forwardSpeed: 14.5,
+    laneSwitchSpeed: 16,
+    jumpForce: 12.2,
+    doubleJumpForce: 10.6,
+    dashCooldown: 1.6,
+    dashSpeedMultiplier: 1.85,
+    magnetRadius: 3.2,
+  },
+  char2: {
+    id: 'char2',
+    name: 'Blaze Dasher',
+    role: 'Heavy Striker',
+    forwardSpeed: 15.2,
+    laneSwitchSpeed: 13,
+    jumpForce: 11.2,
+    doubleJumpForce: 9.8,
+    dashCooldown: 1.1,
+    dashSpeedMultiplier: 2.15,
+    magnetRadius: 2.4,
+  },
+};
+
+/**
  * Core Player entity managing 3-lane lateral movement, velocity, bounds, and character mesh attachment.
  */
 export class Player {
@@ -103,6 +133,15 @@ export class Player {
     this.partnerModel = null;
     this.activeCharacterId = activeCharacterId;
     this.partnerCharacterId = activeCharacterId === 'char1' ? 'char2' : 'char1';
+    this.magnetRadius = CHARACTER_PROFILES[activeCharacterId]?.magnetRadius ?? 2.5;
+    this._customOverrides = {
+      forwardSpeed: options.forwardSpeed,
+      laneSwitchSpeed: options.laneSwitchSpeed,
+      jumpForce: options.jumpForce,
+      doubleJumpForce: options.doubleJumpForce,
+      dashCooldown: options.dashCooldown,
+      dashSpeedMultiplier: options.dashSpeedMultiplier,
+    };
     this._duoModels = {};
     this._duoAnimations = {};
     this._mixer = null;
@@ -110,6 +149,38 @@ export class Player {
     this._activeClipName = null;
     this._animTime = 0;
     this._hitAnimTimer = 0;
+
+    this.applyCharacterProfile(this.activeCharacterId);
+  }
+
+  /**
+   * Applies the stat profile for the given character ID while respecting explicit constructor overrides.
+   * @param {string} characterId
+   */
+  applyCharacterProfile(characterId) {
+    const profile = CHARACTER_PROFILES[characterId] || CHARACTER_PROFILES.char1;
+    this.forwardSpeed = this._customOverrides?.forwardSpeed ?? profile.forwardSpeed;
+    this.laneSwitchSpeed = this._customOverrides?.laneSwitchSpeed ?? profile.laneSwitchSpeed;
+    this.jumpForce = this._customOverrides?.jumpForce ?? profile.jumpForce;
+    this.doubleJumpForce = this._customOverrides?.doubleJumpForce ?? profile.doubleJumpForce;
+    this.dashCooldown = this._customOverrides?.dashCooldown ?? profile.dashCooldown;
+    this.dashSpeedMultiplier =
+      this._customOverrides?.dashSpeedMultiplier ?? profile.dashSpeedMultiplier;
+    this.magnetRadius = profile.magnetRadius;
+  }
+
+  /**
+   * @returns {object}
+   */
+  getActiveProfile() {
+    return CHARACTER_PROFILES[this.activeCharacterId] || CHARACTER_PROFILES.char1;
+  }
+
+  /**
+   * @returns {number}
+   */
+  getMagnetRadius() {
+    return this.magnetRadius;
   }
 
   /**
@@ -200,6 +271,7 @@ export class Player {
 
     this.activeCharacterId = activeId;
     this.partnerCharacterId = partnerId;
+    this.applyCharacterProfile(activeId);
     this.setModel(this._duoModels[activeId] || null, this._duoAnimations[activeId] || []);
     this.setPartnerModel(
       partnerId ? this._duoModels[partnerId] : null,
@@ -225,6 +297,7 @@ export class Player {
     this.activeCharacterId = this.partnerCharacterId;
     this.partnerCharacterId = prevActive;
 
+    this.applyCharacterProfile(this.activeCharacterId);
     this.setModel(nextLeadModel, this._duoAnimations[this.activeCharacterId] || []);
     this.setPartnerModel(nextPartnerModel, this._duoAnimations[this.partnerCharacterId] || []);
     this._swapCooldownTimer = this.swapCooldown;
