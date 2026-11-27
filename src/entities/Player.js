@@ -70,6 +70,8 @@ export class Player {
       activeCharacterId = 'char1',
       partnerOffset = { x: 1.15, y: 0, z: 1.5 },
       swapCooldown = 0.35,
+      maxLives = 3,
+      invulnerabilityDuration = 1.5,
       onLand = null,
       onSwap = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
@@ -92,6 +94,9 @@ export class Player {
     this.dashCooldown = dashCooldown;
     this.dashSpeedMultiplier = dashSpeedMultiplier;
     this.swapCooldown = swapCooldown;
+    this.maxLives = maxLives;
+    this.lives = maxLives;
+    this.invulnerabilityDuration = invulnerabilityDuration;
     this.onLand = onLand;
     this.onSwap = onSwap;
 
@@ -105,6 +110,9 @@ export class Player {
     this._dashTimer = 0;
     this._dashCooldownTimer = 0;
     this._swapCooldownTimer = 0;
+    this.hasShield = false;
+    this._shieldTimer = 0;
+    this._invulnTimer = 0;
 
     this._baseColliderHeight = colliderSize.height ?? PLAYER_COLLIDER_DEFAULTS.height;
     this.colliderSize = {
@@ -127,6 +135,20 @@ export class Player {
     this.partnerGroup.position.copy(this.partnerOffset);
     this.partnerGroup.scale.setScalar(0.88);
     this.group.add(this.partnerGroup);
+
+    this.shieldMesh = new THREE.Mesh(
+      new THREE.SphereGeometry(1.18, 20, 14),
+      new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.28,
+        wireframe: true,
+      }),
+    );
+    this.shieldMesh.name = 'PlayerShield';
+    this.shieldMesh.position.y = 0.95;
+    this.shieldMesh.visible = false;
+    this.group.add(this.shieldMesh);
 
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.model = null;
@@ -306,6 +328,63 @@ export class Player {
       this.onSwap(this.activeCharacterId, this.partnerCharacterId);
     }
     return true;
+  }
+
+  /**
+   * Activates a protective energy shield bubble for the specified duration.
+   * @param {number} [duration=10]
+   */
+  grantShield(duration = 10) {
+    this.hasShield = true;
+    this._shieldTimer = Math.max(this._shieldTimer, duration);
+    this.shieldMesh.visible = true;
+  }
+
+  /**
+   * Consumes any active shield.
+   */
+  clearShield() {
+    this.hasShield = false;
+    this._shieldTimer = 0;
+    this.shieldMesh.visible = false;
+  }
+
+  /**
+   * Grants temporary invulnerability frames with flicker feedback.
+   * @param {number} [duration=this.invulnerabilityDuration]
+   */
+  setInvulnerable(duration = this.invulnerabilityDuration) {
+    this._invulnTimer = Math.max(this._invulnTimer, duration);
+  }
+
+  /**
+   * @returns {boolean}
+   */
+  isInvulnerable() {
+    return this._invulnTimer > 0 || this.isDashing;
+  }
+
+  /**
+   * Processes incoming obstacle damage, prioritizing invulnerability and shield absorption.
+   * @param {number} [amount=1]
+   * @returns {{damaged: boolean, shielded: boolean, remainingLives: number}}
+   */
+  takeDamage(amount = 1) {
+    if (this.isInvulnerable()) {
+      return { damaged: false, shielded: false, remainingLives: this.lives };
+    }
+
+    if (this.hasShield) {
+      this.clearShield();
+      this.setInvulnerable(1.2);
+      this.triggerHitAnimation(0.25);
+      return { damaged: false, shielded: true, remainingLives: this.lives };
+    }
+
+    this.lives = Math.max(0, this.lives - Math.max(1, amount));
+    this.setInvulnerable(this.invulnerabilityDuration);
+    this.triggerHitAnimation(0.35);
+    return { damaged: true, shielded: false, remainingLives: this.lives };
   }
 
   /**
@@ -592,6 +671,26 @@ export class Player {
       this._hitAnimTimer = Math.max(0, this._hitAnimTimer - safeDt);
     }
 
+    if (this.hasShield) {
+      this._shieldTimer -= safeDt;
+      if (this._shieldTimer <= 0) {
+        this.clearShield();
+      } else {
+        this.shieldMesh.rotation.y += safeDt * 1.6;
+        const pulse = 1 + Math.sin(this._animTime * 5) * 0.04;
+        this.shieldMesh.scale.setScalar(pulse);
+      }
+    }
+
+    if (this._invulnTimer > 0) {
+      this._invulnTimer = Math.max(0, this._invulnTimer - safeDt);
+      if (this.model) {
+        this.model.visible = this._invulnTimer === 0 || Math.floor(this._invulnTimer * 16) % 2 === 0;
+      }
+    } else if (this.model && !this.model.visible) {
+      this.model.visible = true;
+    }
+
     this._animTime += safeDt * (this.isDashing ? 1.55 : 1);
     this._updateAnimations(safeDt, prevX, targetX, alpha);
 
@@ -717,9 +816,13 @@ export class Player {
     this._swapCooldownTimer = 0;
     this._hitAnimTimer = 0;
     this._animTime = 0;
+    this.lives = this.maxLives;
+    this._invulnTimer = 0;
+    this.clearShield();
     this.partnerGroup.position.copy(this.partnerOffset);
     this._endSlide();
     if (this.model) {
+      this.model.visible = true;
       this.model.rotation.set(0, 0, 0);
       this.model.scale.y = 1;
     }
