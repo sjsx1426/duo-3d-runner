@@ -1,5 +1,66 @@
 import * as THREE from 'three';
 
+const TEXTURE_KEYS = [
+  'map',
+  'normalMap',
+  'roughnessMap',
+  'metalnessMap',
+  'emissiveMap',
+  'aoMap',
+  'alphaMap',
+];
+
+/**
+ * Recursively disposes geometries, materials, and textures owned by an Object3D subtree.
+ * @param {THREE.Object3D} root
+ * @returns {{ geometries: number, materials: number, textures: number }}
+ */
+export function disposeObject3DResources(root) {
+  const counts = { geometries: 0, materials: 0, textures: 0 };
+  if (!root || typeof root.traverse !== 'function') {
+    return counts;
+  }
+
+  const disposedMaterials = new Set();
+  const disposedTextures = new Set();
+
+  root.traverse((child) => {
+    if (child.geometry && typeof child.geometry.dispose === 'function') {
+      child.geometry.dispose();
+      counts.geometries += 1;
+    }
+
+    const materials = Array.isArray(child.material)
+      ? child.material
+      : child.material
+        ? [child.material]
+        : [];
+
+    for (const mat of materials) {
+      if (!mat || disposedMaterials.has(mat)) {
+        continue;
+      }
+      disposedMaterials.add(mat);
+
+      for (const key of TEXTURE_KEYS) {
+        const tex = mat[key];
+        if (tex && !disposedTextures.has(tex) && typeof tex.dispose === 'function') {
+          disposedTextures.add(tex);
+          tex.dispose();
+          counts.textures += 1;
+        }
+      }
+
+      if (typeof mat.dispose === 'function') {
+        mat.dispose();
+        counts.materials += 1;
+      }
+    }
+  });
+
+  return counts;
+}
+
 /**
  * Renderer quality presets for Low/Medium/High performance tiers.
  */
@@ -129,6 +190,7 @@ export class SceneManager {
     this.maxPixelRatio = maxPixelRatio;
     this.onResizeCallback = onResize;
     this._qualityTier = QUALITY_TIERS[quality] ? quality : 'high';
+    this._mountedInContainer = false;
     this._disposed = false;
 
     const initialPreset = SCENE_PRESETS[preset] || SCENE_PRESETS.neonNight;
@@ -163,6 +225,7 @@ export class SceneManager {
 
     if (!canvas && container && this.renderer.domElement) {
       container.appendChild(this.renderer.domElement);
+      this._mountedInContainer = true;
     }
 
     this._handleWindowResize = () => {
@@ -390,23 +453,27 @@ export class SceneManager {
   }
 
   /**
-   * Cleans up event listeners and WebGL resources.
+   * Cleans up event listeners, scene geometries/materials/textures, and WebGL resources.
    */
   dispose() {
     if (this._disposed) {
       return;
     }
     this._disposed = true;
+    this.onResizeCallback = null;
 
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this._handleWindowResize);
     }
 
-    if (this.skyDome) {
-      this.skyDome.geometry.dispose();
-      this.skyDome.material.dispose();
+    disposeObject3DResources(this.scene);
+    this.scene.clear();
+
+    if (this._mountedInContainer && this.renderer.domElement?.parentNode) {
+      this.renderer.domElement.parentNode.removeChild(this.renderer.domElement);
     }
 
+    this.renderer.renderLists?.dispose();
     this.renderer.dispose();
   }
 }
