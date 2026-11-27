@@ -5,6 +5,7 @@ import { Lighting } from './core/Lighting.js';
 import { GameLoop } from './core/GameLoop.js';
 import { CharacterLoader } from './entities/CharacterLoader.js';
 import { Player } from './entities/Player.js';
+import { InputManager } from './systems/InputManager.js';
 
 const THEME_NAMES = Object.keys(SCENE_PRESETS);
 const CAMERA_MODE_NAMES = Object.keys(CAMERA_MODES);
@@ -50,28 +51,6 @@ function createStarterStage() {
 }
 
 /**
- * Animates procedural character limbs to preview running, jumping, and sliding motion.
- * @param {THREE.Object3D|null} model
- * @param {number} elapsed
- * @param {boolean} isGrounded
- * @param {number} [phaseOffset=0]
- */
-function animateCharacterPreview(model, elapsed, isGrounded, phaseOffset = 0) {
-  const joints = model?.userData?.joints;
-  if (!joints) {
-    return;
-  }
-
-  const stride = isGrounded ? Math.sin(elapsed * 12 + phaseOffset) : 0.45;
-  joints.leftLeg.rotation.x = stride * 0.75;
-  joints.rightLeg.rotation.x = -stride * 0.75;
-  joints.leftArm.rotation.x = -stride * 0.65;
-  joints.rightArm.rotation.x = stride * 0.65;
-  joints.torso.position.y =
-    1.05 + Math.abs(Math.cos(elapsed * 12 + phaseOffset)) * (isGrounded ? 0.06 : 0.02);
-}
-
-/**
  * Application entry point for Duo 3D Runner.
  */
 export function initApp() {
@@ -84,6 +63,7 @@ export function initApp() {
   const cameraController = new CameraController({ mode: 'runner' });
   const lighting = new Lighting(sceneManager.getScene(), { theme: 'neonNight' });
   const characterLoader = new CharacterLoader();
+  const inputManager = new InputManager();
 
   sceneManager.setResizeCallback((width, height) => {
     cameraController.setAspect(width, height);
@@ -121,43 +101,56 @@ export function initApp() {
         char2: char2Entry.model,
       },
       'char1',
+      {
+        char1: char1Entry.animations,
+        char2: char2Entry.animations,
+      },
     );
   });
 
-  const handleKeyDown = (event) => {
-    const code = event.code;
-    if (code === 'ArrowLeft' || code === 'KeyA') {
-      player.moveLeft();
-    } else if (code === 'ArrowRight' || code === 'KeyD') {
-      player.moveRight();
-    } else if (code === 'Space' || code === 'ArrowUp' || code === 'KeyW') {
-      player.jump();
-    } else if (code === 'ArrowDown' || code === 'KeyS') {
-      player.slide();
-    } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
-      player.dash();
-    } else if (code === 'KeyQ' || code === 'Tab') {
-      if (code === 'Tab') {
-        event.preventDefault();
-      }
-      player.swapCharacter();
-    } else if (code === 'KeyT') {
+  inputManager.on('left', () => player.moveLeft());
+  inputManager.on('right', () => player.moveRight());
+  inputManager.on('jump', () => {
+    if (player.jump()) {
+      inputManager.consumeBufferedAction('jump');
+    }
+  });
+  inputManager.on('slide', () => player.slide());
+  inputManager.on('dash', () => player.dash());
+  inputManager.on('swap', () => player.swapCharacter());
+  inputManager.on('pause', () => loop.togglePause());
+
+  const handlePreviewKeys = (event) => {
+    if (event.repeat) {
+      return;
+    }
+    if (event.code === 'KeyT') {
       themeIndex = (themeIndex + 1) % THEME_NAMES.length;
       const nextTheme = THEME_NAMES[themeIndex];
       sceneManager.setAtmospherePreset(nextTheme, 0.8);
       lighting.setTheme(nextTheme);
-    } else if (code === 'KeyC') {
+    } else if (event.code === 'KeyC') {
       modeIndex = (modeIndex + 1) % CAMERA_MODE_NAMES.length;
       cameraController.setMode(CAMERA_MODE_NAMES[modeIndex]);
-    } else if (code === 'KeyP' || code === 'Escape') {
-      loop.togglePause();
+    } else if (event.code === 'KeyB') {
+      if (player.hasShield) {
+        player.clearShield();
+      } else {
+        player.grantShield(8);
+      }
     }
   };
 
-  window.addEventListener('keydown', handleKeyDown);
+  window.addEventListener('keydown', handlePreviewKeys);
 
   const loop = new GameLoop({
-    onUpdate: (dt, elapsed) => {
+    onUpdate: (dt) => {
+      inputManager.update(dt);
+
+      if (player.isGrounded && inputManager.consumeBufferedAction('jump')) {
+        player.jump();
+      }
+
       player.update(dt);
 
       const activeSpeed = player.getEffectiveForwardSpeed();
@@ -167,9 +160,6 @@ export function initApp() {
 
       const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
       cameraController.setFovBoost(fovBoost);
-
-      animateCharacterPreview(player.model, elapsed, player.isGrounded, 0);
-      animateCharacterPreview(player.getPartnerModel(), elapsed, true, 0.8);
 
       sceneManager.updateAtmosphere(dt);
       cameraController.update(dt);
@@ -188,10 +178,12 @@ export function initApp() {
     cameraController,
     lighting,
     characterLoader,
+    inputManager,
     player,
     loop,
     dispose: () => {
-      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keydown', handlePreviewKeys);
+      inputManager.dispose();
       loop.dispose();
       lighting.dispose();
       sceneManager.dispose();
