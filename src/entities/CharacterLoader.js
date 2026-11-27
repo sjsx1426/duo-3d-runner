@@ -38,6 +38,23 @@ function enableShadows(root) {
 }
 
 /**
+ * Creates an articulated limb group with mesh offset from its pivot.
+ * @param {number} width
+ * @param {number} height
+ * @param {number} depth
+ * @param {THREE.Material} material
+ * @param {number} pivotOffsetY
+ * @returns {THREE.Group}
+ */
+function createLimb(width, height, depth, material, pivotOffsetY) {
+  const pivot = new THREE.Group();
+  const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
+  mesh.position.y = pivotOffsetY;
+  pivot.add(mesh);
+  return pivot;
+}
+
+/**
  * Builds a stylized cyber-runner procedural 3D avatar for Character 1 when char1.glb is absent.
  * Feet rest at y = 0 and articulated joints are exposed via group.userData.joints.
  * @returns {THREE.Group}
@@ -85,14 +102,6 @@ export function createProceduralChar1() {
   head.add(helmet, visor);
   torso.add(head);
 
-  const createLimb = (width, height, depth, material, pivotOffsetY) => {
-    const pivot = new THREE.Group();
-    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
-    mesh.position.y = pivotOffsetY;
-    pivot.add(mesh);
-    return pivot;
-  };
-
   const leftArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
   leftArm.position.set(-0.39, 0.22, 0);
   const rightArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
@@ -120,7 +129,98 @@ export function createProceduralChar1() {
 }
 
 /**
- * Minimal neutral fallback mesh used before character-specific procedural avatars are registered.
+ * Builds a heavy-dasher procedural 3D avatar for Character 2 when char2.glb is absent.
+ * Shares the same joint rig contract with distinct armored silhouette and amber-orange accents.
+ * @returns {THREE.Group}
+ */
+export function createProceduralChar2() {
+  const root = new THREE.Group();
+  root.name = 'Procedural_char2';
+
+  const armorMat = new THREE.MeshStandardMaterial({
+    color: 0xf97316,
+    roughness: 0.38,
+    metalness: 0.5,
+  });
+  const suitMat = new THREE.MeshStandardMaterial({
+    color: 0x1e1b2e,
+    roughness: 0.62,
+    metalness: 0.25,
+  });
+  const accentMat = new THREE.MeshStandardMaterial({
+    color: 0xfde047,
+    emissive: 0xf59e0b,
+    emissiveIntensity: 1.35,
+    roughness: 0.2,
+    metalness: 0.15,
+  });
+
+  const torso = new THREE.Group();
+  torso.position.y = 1.08;
+
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.68, 0.66, 0.38), armorMat);
+  const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.24, 0.42), accentMat);
+  chestPlate.position.y = 0.12;
+  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.44, 0.2), suitMat);
+  pack.position.set(0, 0.04, 0.26);
+
+  for (const offsetX of [-0.14, 0.14]) {
+    const booster = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.07, 0.1, 0.16, 12),
+      accentMat,
+    );
+    booster.rotation.x = Math.PI / 2;
+    booster.position.set(offsetX, -0.04, 0.36);
+    torso.add(booster);
+  }
+  torso.add(chest, chestPlate, pack);
+
+  const head = new THREE.Group();
+  head.position.y = 0.51;
+  const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.36, 0.38), suitMat);
+  const crest = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.14, 0.42), armorMat);
+  crest.position.y = 0.18;
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.1, 0.08), accentMat);
+  visor.position.set(0, 0.02, -0.18);
+  head.add(helmet, crest, visor);
+  torso.add(head);
+
+  const leftArm = createLimb(0.2, 0.54, 0.2, suitMat, -0.24);
+  leftArm.position.set(-0.46, 0.22, 0);
+  const leftPauldron = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), armorMat);
+  leftPauldron.position.y = 0.02;
+  leftArm.add(leftPauldron);
+
+  const rightArm = createLimb(0.2, 0.54, 0.2, suitMat, -0.24);
+  rightArm.position.set(0.46, 0.22, 0);
+  const rightPauldron = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.2, 0.28), armorMat);
+  rightPauldron.position.y = 0.02;
+  rightArm.add(rightPauldron);
+
+  torso.add(leftArm, rightArm);
+
+  const leftLeg = createLimb(0.23, 0.7, 0.25, suitMat, -0.35);
+  leftLeg.position.set(-0.18, 0.74, 0);
+  const rightLeg = createLimb(0.23, 0.7, 0.25, suitMat, -0.35);
+  rightLeg.position.set(0.18, 0.74, 0);
+
+  const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.36), armorMat);
+  leftBoot.position.set(0, -0.66, -0.05);
+  leftLeg.add(leftBoot);
+
+  const rightBoot = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.16, 0.36), armorMat);
+  rightBoot.position.set(0, -0.66, -0.05);
+  rightLeg.add(rightBoot);
+
+  root.add(torso, leftLeg, rightLeg);
+  root.userData.joints = { torso, head, leftArm, rightArm, leftLeg, rightLeg };
+
+  enableShadows(root);
+  return root;
+}
+
+/**
+ * Minimal neutral fallback mesh used when an unknown character ID is requested.
  * @param {string} characterId
  * @returns {THREE.Group}
  */
@@ -128,14 +228,16 @@ function createMinimalFallback(characterId) {
   if (characterId === 'char1') {
     return createProceduralChar1();
   }
+  if (characterId === 'char2') {
+    return createProceduralChar2();
+  }
 
   const group = new THREE.Group();
   group.name = `Fallback_${characterId}`;
 
-  const color = characterId === 'char2' ? 0xf97316 : 0x38bdf8;
   const body = new THREE.Mesh(
     new THREE.CapsuleGeometry(0.35, 0.9, 6, 12),
-    new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.25 }),
+    new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.45, metalness: 0.25 }),
   );
   body.position.y = 0.85;
   group.add(body);
