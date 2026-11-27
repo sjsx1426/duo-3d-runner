@@ -39,6 +39,46 @@ function enableShadows(root) {
 }
 
 /**
+ * Normalizes a loaded character model so it stands upright at y = 0, centered on X/Z,
+ * scaled uniformly to targetHeight, with shadows enabled on all meshes.
+ * @param {THREE.Object3D} model
+ * @param {number} [targetHeight=1.85]
+ * @returns {THREE.Group}
+ */
+export function normalizeCharacterModel(model, targetHeight = 1.85) {
+  const wrapper = new THREE.Group();
+  wrapper.name = model.name ? `Normalized_${model.name}` : 'NormalizedCharacter';
+
+  model.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(model);
+  const size = new THREE.Vector3();
+  const center = new THREE.Vector3();
+  box.getSize(size);
+  box.getCenter(center);
+
+  if (size.y > 0.0001 && Number.isFinite(size.y)) {
+    const scaleFactor = targetHeight / size.y;
+    model.scale.multiplyScalar(scaleFactor);
+    model.updateMatrixWorld(true);
+    box.setFromObject(model);
+    box.getCenter(center);
+  }
+
+  model.position.x -= center.x;
+  model.position.z -= center.z;
+  model.position.y -= box.min.y;
+
+  wrapper.add(model);
+  if (model.userData?.joints) {
+    wrapper.userData.joints = model.userData.joints;
+  }
+  wrapper.userData.normalizedHeight = targetHeight;
+
+  enableShadows(wrapper);
+  return wrapper;
+}
+
+/**
  * Creates an articulated limb group with mesh offset from its pivot.
  * @param {number} width
  * @param {number} height
@@ -286,17 +326,20 @@ export class CharacterLoader {
    * @param {GLTFLoader} [options.loader]
    * @param {Record<string, string>} [options.paths]
    * @param {(characterId: string) => THREE.Object3D} [options.fallbackBuilder]
+   * @param {number} [options.targetHeight=1.85]
    */
   constructor(options = {}) {
     const {
       loader = new GLTFLoader(),
       paths = CHARACTER_PATHS,
       fallbackBuilder = null,
+      targetHeight = 1.85,
     } = options;
 
     this.loader = loader;
     this.paths = { ...paths };
     this.fallbackBuilder = fallbackBuilder;
+    this.targetHeight = targetHeight;
     this._cache = new Map();
     this._pendingLoads = new Map();
   }
@@ -394,10 +437,10 @@ export class CharacterLoader {
         const looksLikeHtmlFallback = contentType.includes('text/html');
         if (response.ok && !looksLikeHtmlFallback) {
           const gltf = await this.loader.loadAsync(url);
-          enableShadows(gltf.scene);
+          const normalized = normalizeCharacterModel(gltf.scene, this.targetHeight);
           return {
             id: characterId,
-            template: gltf.scene,
+            template: normalized,
             animations: gltf.animations || [],
             isFallback: false,
           };
