@@ -19,19 +19,29 @@ export class InputManager {
    * @param {object} [options]
    * @param {EventTarget|null} [options.target]
    * @param {Record<string, string[]>} [options.bindings]
+   * @param {boolean} [options.ignoreRepeat=true]
+   * @param {number} [options.bufferWindow=0.14]
+   * @param {string[]} [options.bufferableActions]
    */
   constructor(options = {}) {
     const {
       target = typeof window !== 'undefined' ? window : null,
       bindings = DEFAULT_BINDINGS,
+      ignoreRepeat = true,
+      bufferWindow = 0.14,
+      bufferableActions = ['jump', 'slide', 'left', 'right', 'dash', 'swap'],
     } = options;
 
     this.target = target;
+    this.ignoreRepeat = ignoreRepeat;
+    this.bufferWindow = bufferWindow;
+    this.bufferableActions = new Set(bufferableActions);
     this.bindings = {};
     this._codeToAction = new Map();
     this._pressedCodes = new Set();
     this._pressedActions = new Set();
     this._listeners = new Map();
+    this._actionBuffer = new Map();
     this._disposed = false;
 
     this.setBindings(bindings);
@@ -88,17 +98,69 @@ export class InputManager {
   }
 
   /**
-   * Emits an action to registered subscribers.
+   * Emits an action to registered subscribers and queues it in the action buffer if bufferable.
    * @param {string} action
    * @param {object} [meta]
    */
   emit(action, meta = {}) {
+    if (this.bufferableActions.has(action)) {
+      this.bufferAction(action);
+    }
     const handlers = this._listeners.get(action);
     if (!handlers) {
       return;
     }
     for (const handler of handlers) {
       handler(action, meta);
+    }
+  }
+
+  /**
+   * Queues an action in the short input buffer for pre-landing/cooldown responsiveness.
+   * @param {string} action
+   * @param {number} [ttl=this.bufferWindow]
+   */
+  bufferAction(action, ttl = this.bufferWindow) {
+    if (ttl > 0) {
+      this._actionBuffer.set(action, ttl);
+    }
+  }
+
+  /**
+   * Checks whether an action is currently buffered.
+   * @param {string} action
+   * @returns {boolean}
+   */
+  hasBufferedAction(action) {
+    return (this._actionBuffer.get(action) || 0) > 0;
+  }
+
+  /**
+   * Consumes and clears a buffered action if still within its time window.
+   * @param {string} action
+   * @returns {boolean}
+   */
+  consumeBufferedAction(action) {
+    if (!this.hasBufferedAction(action)) {
+      return false;
+    }
+    this._actionBuffer.delete(action);
+    return true;
+  }
+
+  /**
+   * Advances buffer timers; call once per frame.
+   * @param {number} dt Delta time in seconds
+   */
+  update(dt) {
+    const safeDt = Math.max(0, dt || 0);
+    for (const [action, remaining] of this._actionBuffer.entries()) {
+      const next = remaining - safeDt;
+      if (next <= 0) {
+        this._actionBuffer.delete(action);
+      } else {
+        this._actionBuffer.set(action, next);
+      }
     }
   }
 
@@ -121,6 +183,10 @@ export class InputManager {
       (event.code === 'Space' || event.code === 'Tab' || event.code.startsWith('Arrow'))
     ) {
       event.preventDefault();
+    }
+
+    if (this.ignoreRepeat && event.repeat) {
+      return;
     }
 
     this._pressedCodes.add(event.code);
@@ -160,11 +226,12 @@ export class InputManager {
   }
 
   /**
-   * Clears all held key states (e.g. on window blur).
+   * Clears all held key states and buffered actions.
    */
   clearPressed() {
     this._pressedCodes.clear();
     this._pressedActions.clear();
+    this._actionBuffer.clear();
   }
 
   /**
