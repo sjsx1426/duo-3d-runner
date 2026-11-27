@@ -1,6 +1,30 @@
 import * as THREE from 'three';
 
 /**
+ * Renderer quality presets for Low/Medium/High performance tiers.
+ */
+export const QUALITY_TIERS = {
+  low: {
+    maxPixelRatio: 1,
+    shadowsEnabled: false,
+    shadowType: THREE.BasicShadowMap,
+    toneMappingExposure: 1.0,
+  },
+  medium: {
+    maxPixelRatio: 1.5,
+    shadowsEnabled: true,
+    shadowType: THREE.PCFShadowMap,
+    toneMappingExposure: 1.05,
+  },
+  high: {
+    maxPixelRatio: 2,
+    shadowsEnabled: true,
+    shadowType: THREE.PCFSoftShadowMap,
+    toneMappingExposure: 1.08,
+  },
+};
+
+/**
  * Atmosphere presets combining sky gradient colors and distance fog parameters.
  */
 export const SCENE_PRESETS = {
@@ -85,6 +109,7 @@ export class SceneManager {
    * @param {number} [options.maxPixelRatio=2]
    * @param {(width: number, height: number) => void} [options.onResize]
    * @param {string} [options.preset='neonNight']
+   * @param {string} [options.quality='high']
    */
   constructor(options = {}) {
     const {
@@ -98,10 +123,12 @@ export class SceneManager {
       maxPixelRatio = 2,
       onResize = null,
       preset = 'neonNight',
+      quality = 'high',
     } = options;
 
     this.maxPixelRatio = maxPixelRatio;
     this.onResizeCallback = onResize;
+    this._qualityTier = QUALITY_TIERS[quality] ? quality : 'high';
     this._disposed = false;
 
     const initialPreset = SCENE_PRESETS[preset] || SCENE_PRESETS.neonNight;
@@ -131,7 +158,8 @@ export class SceneManager {
     this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    this.renderer.toneMappingExposure = 1.05;
+    this.renderer.toneMappingExposure = 1.08;
+    this.setQualityTier(this._qualityTier);
 
     if (!canvas && container && this.renderer.domElement) {
       container.appendChild(this.renderer.domElement);
@@ -191,6 +219,46 @@ export class SceneManager {
    */
   setResizeCallback(callback) {
     this.onResizeCallback = callback;
+  }
+
+  /**
+   * Applies a performance quality tier ('low', 'medium', 'high') for shadows, pixel ratio, and exposure.
+   * @param {string} tierName
+   */
+  setQualityTier(tierName) {
+    const tier = QUALITY_TIERS[tierName];
+    if (!tier || this._disposed) {
+      return;
+    }
+
+    this._qualityTier = tierName;
+    this.maxPixelRatio = tier.maxPixelRatio;
+    this.renderer.shadowMap.enabled = tier.shadowsEnabled;
+    this.renderer.shadowMap.type = tier.shadowType;
+    this.renderer.shadowMap.needsUpdate = true;
+    this.renderer.toneMappingExposure = tier.toneMappingExposure;
+
+    if (typeof window !== 'undefined') {
+      this.resize(window.innerWidth, window.innerHeight);
+    }
+  }
+
+  /**
+   * @returns {string} Active quality tier name
+   */
+  getQualityTier() {
+    return this._qualityTier;
+  }
+
+  /**
+   * Updates ACESFilmic tone mapping exposure directly.
+   * @param {number} exposure
+   */
+  setToneMappingExposure(exposure) {
+    if (this._disposed || typeof exposure !== 'number') {
+      return;
+    }
+    this.renderer.toneMappingExposure = Math.max(0.2, Math.min(2.5, exposure));
   }
 
   /**
