@@ -37,7 +37,11 @@ export class Player {
       dashDuration = 0.25,
       dashCooldown = 1.6,
       dashSpeedMultiplier = 1.85,
+      activeCharacterId = 'char1',
+      partnerOffset = { x: 1.15, y: 0, z: 1.5 },
+      swapCooldown = 0.35,
       onLand = null,
+      onSwap = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
     } = options;
 
@@ -57,7 +61,9 @@ export class Player {
     this.dashDuration = dashDuration;
     this.dashCooldown = dashCooldown;
     this.dashSpeedMultiplier = dashSpeedMultiplier;
+    this.swapCooldown = swapCooldown;
     this.onLand = onLand;
+    this.onSwap = onSwap;
 
     this.isGrounded = true;
     this.jumpsUsed = 0;
@@ -68,6 +74,7 @@ export class Player {
     this.isDashing = false;
     this._dashTimer = 0;
     this._dashCooldownTimer = 0;
+    this._swapCooldownTimer = 0;
 
     this._baseColliderHeight = colliderSize.height ?? PLAYER_COLLIDER_DEFAULTS.height;
     this.colliderSize = {
@@ -80,8 +87,23 @@ export class Player {
     this.group.name = 'Player';
     this.group.position.set(this.getTargetX(), 0, 0);
 
+    this.partnerOffset = new THREE.Vector3(
+      partnerOffset.x ?? 1.15,
+      partnerOffset.y ?? 0,
+      partnerOffset.z ?? 1.5,
+    );
+    this.partnerGroup = new THREE.Group();
+    this.partnerGroup.name = 'DuoPartner';
+    this.partnerGroup.position.copy(this.partnerOffset);
+    this.partnerGroup.scale.setScalar(0.88);
+    this.group.add(this.partnerGroup);
+
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.model = null;
+    this.partnerModel = null;
+    this.activeCharacterId = activeCharacterId;
+    this.partnerCharacterId = activeCharacterId === 'char1' ? 'char2' : 'char1';
+    this._duoModels = {};
   }
 
   /**
@@ -99,7 +121,7 @@ export class Player {
   }
 
   /**
-   * Attaches a loaded or procedural 3D model to the player container.
+   * Attaches a loaded or procedural 3D model to the active lead player container.
    * @param {THREE.Object3D|null} model
    */
   setModel(model) {
@@ -108,8 +130,98 @@ export class Player {
     }
     this.model = model || null;
     if (this.model) {
+      this.model.position.set(0, 0, 0);
+      this.model.rotation.set(0, 0, 0);
+      this.model.scale.set(1, 1, 1);
       this.group.add(this.model);
     }
+  }
+
+  /**
+   * Attaches the duo partner companion model inside the trailing partner group.
+   * @param {THREE.Object3D|null} model
+   */
+  setPartnerModel(model) {
+    if (this.partnerModel && this.partnerModel.parent === this.partnerGroup) {
+      this.partnerGroup.remove(this.partnerModel);
+    }
+    this.partnerModel = model || null;
+    if (this.partnerModel) {
+      this.partnerModel.position.set(0, 0, 0);
+      this.partnerModel.rotation.set(0, 0, 0);
+      this.partnerModel.scale.set(1, 1, 1);
+      this.partnerGroup.add(this.partnerModel);
+    }
+  }
+
+  /**
+   * Registers both duo character models and mounts the lead + trailing companion.
+   * @param {{char1?: THREE.Object3D, char2?: THREE.Object3D}} models
+   * @param {string} [primaryId='char1']
+   */
+  setDuoModels(models = {}, primaryId = 'char1') {
+    this._duoModels = { ...models };
+    const ids = Object.keys(this._duoModels).filter((id) => Boolean(this._duoModels[id]));
+    if (ids.length === 0) {
+      return;
+    }
+
+    const activeId = this._duoModels[primaryId] ? primaryId : ids[0];
+    const partnerId = ids.find((id) => id !== activeId) || null;
+
+    this.activeCharacterId = activeId;
+    this.partnerCharacterId = partnerId;
+    this.setModel(this._duoModels[activeId] || null);
+    this.setPartnerModel(partnerId ? this._duoModels[partnerId] : null);
+  }
+
+  /**
+   * Swaps the active lead character with the trailing duo partner.
+   * @returns {boolean} True if swap occurred
+   */
+  swapCharacter() {
+    if (this._swapCooldownTimer > 0 || !this.partnerCharacterId) {
+      return false;
+    }
+    const nextLeadModel = this._duoModels[this.partnerCharacterId];
+    const nextPartnerModel = this._duoModels[this.activeCharacterId];
+    if (!nextLeadModel || !nextPartnerModel) {
+      return false;
+    }
+
+    const prevActive = this.activeCharacterId;
+    this.activeCharacterId = this.partnerCharacterId;
+    this.partnerCharacterId = prevActive;
+
+    this.setModel(nextLeadModel);
+    this.setPartnerModel(nextPartnerModel);
+    this._swapCooldownTimer = this.swapCooldown;
+
+    if (typeof this.onSwap === 'function') {
+      this.onSwap(this.activeCharacterId, this.partnerCharacterId);
+    }
+    return true;
+  }
+
+  /**
+   * @returns {string}
+   */
+  getActiveCharacterId() {
+    return this.activeCharacterId;
+  }
+
+  /**
+   * @returns {string|null}
+   */
+  getPartnerCharacterId() {
+    return this.partnerCharacterId;
+  }
+
+  /**
+   * @returns {THREE.Object3D|null}
+   */
+  getPartnerModel() {
+    return this.partnerModel;
   }
 
   /**
@@ -340,6 +452,9 @@ export class Player {
     if (this._dashCooldownTimer > 0) {
       this._dashCooldownTimer = Math.max(0, this._dashCooldownTimer - safeDt);
     }
+    if (this._swapCooldownTimer > 0) {
+      this._swapCooldownTimer = Math.max(0, this._swapCooldownTimer - safeDt);
+    }
 
     if (this.model) {
       const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
@@ -348,6 +463,18 @@ export class Player {
       this.model.rotation.x += (targetPitch - this.model.rotation.x) * Math.min(1, safeDt * 16);
       const targetScaleY = this.isSliding ? 0.55 : 1;
       this.model.scale.y += (targetScaleY - this.model.scale.y) * Math.min(1, safeDt * 18);
+    }
+
+    if (this.partnerModel) {
+      const targetPartnerX =
+        (this.group.position.x > 1.5 ? -Math.abs(this.partnerOffset.x) : this.partnerOffset.x) +
+        (prevX - targetX) * 0.15;
+      const partnerAlpha = 1 - Math.exp(-9 * safeDt);
+      this.partnerGroup.position.x += (targetPartnerX - this.partnerGroup.position.x) * partnerAlpha;
+      this.partnerGroup.position.y +=
+        (this.partnerOffset.y - this.group.position.y * 0.25 - this.partnerGroup.position.y) *
+        partnerAlpha;
+      this.partnerGroup.position.z = this.partnerOffset.z;
     }
   }
 
@@ -364,6 +491,8 @@ export class Player {
     this.isDashing = false;
     this._dashTimer = 0;
     this._dashCooldownTimer = 0;
+    this._swapCooldownTimer = 0;
+    this.partnerGroup.position.copy(this.partnerOffset);
     this._endSlide();
     if (this.model) {
       this.model.rotation.set(0, 0, 0);
