@@ -4,8 +4,8 @@ import { CameraController, CAMERA_MODES } from './core/CameraController.js';
 import { Lighting } from './core/Lighting.js';
 import { GameLoop } from './core/GameLoop.js';
 import { CharacterLoader } from './entities/CharacterLoader.js';
+import { Player } from './entities/Player.js';
 
-const LANE_POSITIONS = [-3, 0, 3];
 const THEME_NAMES = Object.keys(SCENE_PRESETS);
 const CAMERA_MODE_NAMES = Object.keys(CAMERA_MODES);
 
@@ -50,23 +50,25 @@ function createStarterStage() {
 }
 
 /**
- * Animates procedural character limbs to preview running and jumping motion.
+ * Animates procedural character limbs to preview running, jumping, and sliding motion.
  * @param {THREE.Object3D|null} model
  * @param {number} elapsed
  * @param {boolean} isGrounded
+ * @param {number} [phaseOffset=0]
  */
-function animateCharacterPreview(model, elapsed, isGrounded) {
+function animateCharacterPreview(model, elapsed, isGrounded, phaseOffset = 0) {
   const joints = model?.userData?.joints;
   if (!joints) {
     return;
   }
 
-  const stride = isGrounded ? Math.sin(elapsed * 12) : 0.45;
+  const stride = isGrounded ? Math.sin(elapsed * 12 + phaseOffset) : 0.45;
   joints.leftLeg.rotation.x = stride * 0.75;
   joints.rightLeg.rotation.x = -stride * 0.75;
   joints.leftArm.rotation.x = -stride * 0.65;
   joints.rightArm.rotation.x = stride * 0.65;
-  joints.torso.position.y = 1.05 + Math.abs(Math.cos(elapsed * 12)) * (isGrounded ? 0.06 : 0.02);
+  joints.torso.position.y =
+    1.05 + Math.abs(Math.cos(elapsed * 12 + phaseOffset)) * (isGrounded ? 0.06 : 0.02);
 }
 
 /**
@@ -91,37 +93,54 @@ export function initApp() {
   const stage = createStarterStage();
   sceneManager.add(stage.group);
 
-  const playerRig = new THREE.Group();
-  playerRig.name = 'PreviewPlayerRig';
-  sceneManager.add(playerRig);
-  cameraController.setTarget(playerRig, true);
+  const player = new Player({
+    onLand: (impactVelocity) => {
+      if (impactVelocity > 6) {
+        cameraController.addShake(0.2);
+      }
+    },
+    onSwap: () => {
+      cameraController.addShake(0.12);
+    },
+  });
 
-  let activeModel = null;
-  let laneIndex = 1;
-  let verticalVelocity = 0;
-  let isGrounded = true;
+  sceneManager.add(player.getObject3D());
+  cameraController.setTarget(player.getObject3D(), true);
+
   let themeIndex = 0;
   let modeIndex = 0;
-  const runSpeed = 14;
+  let gridOffset = 0;
 
-  characterLoader.load('char1').then((loaded) => {
+  characterLoader.preloadAll(['char1', 'char2']).then(([char1Entry, char2Entry]) => {
     if (sceneManager._disposed) {
       return;
     }
-    activeModel = loaded.model;
-    playerRig.add(activeModel);
+    player.setDuoModels(
+      {
+        char1: char1Entry.model,
+        char2: char2Entry.model,
+      },
+      'char1',
+    );
   });
 
   const handleKeyDown = (event) => {
     const code = event.code;
     if (code === 'ArrowLeft' || code === 'KeyA') {
-      laneIndex = Math.max(0, laneIndex - 1);
+      player.moveLeft();
     } else if (code === 'ArrowRight' || code === 'KeyD') {
-      laneIndex = Math.min(LANE_POSITIONS.length - 1, laneIndex + 1);
-    } else if ((code === 'Space' || code === 'ArrowUp' || code === 'KeyW') && isGrounded) {
-      verticalVelocity = 9.5;
-      isGrounded = false;
-      cameraController.setFovBoost(5);
+      player.moveRight();
+    } else if (code === 'Space' || code === 'ArrowUp' || code === 'KeyW') {
+      player.jump();
+    } else if (code === 'ArrowDown' || code === 'KeyS') {
+      player.slide();
+    } else if (code === 'ShiftLeft' || code === 'ShiftRight') {
+      player.dash();
+    } else if (code === 'KeyQ' || code === 'Tab') {
+      if (code === 'Tab') {
+        event.preventDefault();
+      }
+      player.swapCharacter();
     } else if (code === 'KeyT') {
       themeIndex = (themeIndex + 1) % THEME_NAMES.length;
       const nextTheme = THEME_NAMES[themeIndex];
@@ -139,28 +158,22 @@ export function initApp() {
 
   const loop = new GameLoop({
     onUpdate: (dt, elapsed) => {
-      const targetX = LANE_POSITIONS[laneIndex];
-      playerRig.position.x += (targetX - playerRig.position.x) * Math.min(1, dt * 14);
+      player.update(dt);
 
-      if (!isGrounded) {
-        verticalVelocity -= 24 * dt;
-        playerRig.position.y += verticalVelocity * dt;
-        if (playerRig.position.y <= 0) {
-          playerRig.position.y = 0;
-          verticalVelocity = 0;
-          isGrounded = true;
-          cameraController.setFovBoost(0);
-          cameraController.addShake(0.18);
-        }
-      }
-
+      const activeSpeed = player.getEffectiveForwardSpeed();
       const gridStep = 140 / 46;
-      stage.grid.position.z = -45 + ((elapsed * runSpeed) % gridStep);
+      gridOffset = (gridOffset + activeSpeed * dt) % gridStep;
+      stage.grid.position.z = -45 + gridOffset;
 
-      animateCharacterPreview(activeModel, elapsed, isGrounded);
+      const fovBoost = player.isDashing ? 10 : player.isGrounded ? 0 : 4;
+      cameraController.setFovBoost(fovBoost);
+
+      animateCharacterPreview(player.model, elapsed, player.isGrounded, 0);
+      animateCharacterPreview(player.getPartnerModel(), elapsed, true, 0.8);
+
       sceneManager.updateAtmosphere(dt);
       cameraController.update(dt);
-      lighting.updateFollow(playerRig.position);
+      lighting.updateFollow(player.position);
     },
     onRender: () => {
       sceneManager.render(cameraController.getCamera());
@@ -175,6 +188,7 @@ export function initApp() {
     cameraController,
     lighting,
     characterLoader,
+    player,
     loop,
     dispose: () => {
       window.removeEventListener('keydown', handleKeyDown);
