@@ -32,10 +32,20 @@ export class CameraController {
     this.lookOffset = new THREE.Vector3(lookOffset.x, lookOffset.y, lookOffset.z);
     this.followDamping = followDamping;
 
+    this._basePosition = new THREE.Vector3().copy(this.offset);
     this._desiredPosition = new THREE.Vector3();
     this._currentLookAt = new THREE.Vector3();
     this._desiredLookAt = new THREE.Vector3();
     this._target = null;
+
+    this._trauma = 0;
+    this._shakeDecay = 2.4;
+    this._maxShakeOffset = 0.65;
+    this._shakeTime = 0;
+
+    this._baseFov = fov;
+    this._fovBoost = 0;
+    this._fovDamping = 7;
 
     this.camera.position.copy(this.offset);
     this._currentLookAt.copy(this.lookOffset);
@@ -64,11 +74,12 @@ export class CameraController {
       return;
     }
 
-    this.camera.position.set(
+    this._basePosition.set(
       pos.x + this.offset.x,
       pos.y + this.offset.y,
       pos.z + this.offset.z,
     );
+    this.camera.position.copy(this._basePosition);
     this._currentLookAt.set(
       pos.x + this.lookOffset.x,
       pos.y + this.lookOffset.y,
@@ -78,7 +89,31 @@ export class CameraController {
   }
 
   /**
-   * Smoothly updates camera position and orientation toward the active target.
+   * Adds trauma-based camera shake in the [0, 1] range.
+   * @param {number} amount
+   */
+  addShake(amount = 0.5) {
+    this._trauma = Math.min(1, Math.max(0, this._trauma + amount));
+  }
+
+  /**
+   * Sets the baseline field of view in degrees.
+   * @param {number} fov
+   */
+  setBaseFov(fov) {
+    this._baseFov = Math.max(30, Math.min(110, fov));
+  }
+
+  /**
+   * Sets an additional temporary FOV boost in degrees (e.g. during sprint or dash).
+   * @param {number} boost
+   */
+  setFovBoost(boost = 0) {
+    this._fovBoost = Math.max(-15, Math.min(30, boost));
+  }
+
+  /**
+   * Smoothly updates camera position, trauma shake, FOV boost, and orientation.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
@@ -101,8 +136,25 @@ export class CameraController {
       pos.z + this.lookOffset.z,
     );
 
-    this.camera.position.lerp(this._desiredPosition, alpha);
+    this._basePosition.lerp(this._desiredPosition, alpha);
     this._currentLookAt.lerp(this._desiredLookAt, alpha);
+
+    this.camera.position.copy(this._basePosition);
+    if (this._trauma > 0) {
+      this._shakeTime += safeDt * 45;
+      const shakePower = this._trauma * this._trauma * this._maxShakeOffset;
+      this.camera.position.x += Math.sin(this._shakeTime * 1.3) * shakePower;
+      this.camera.position.y += Math.cos(this._shakeTime * 1.9) * shakePower * 0.8;
+      this._trauma = Math.max(0, this._trauma - this._shakeDecay * safeDt);
+    }
+
+    const targetFov = this._baseFov + this._fovBoost;
+    if (Math.abs(this.camera.fov - targetFov) > 0.01) {
+      const fovAlpha = 1 - Math.exp(-this._fovDamping * safeDt);
+      this.camera.fov += (targetFov - this.camera.fov) * fovAlpha;
+      this.camera.updateProjectionMatrix();
+    }
+
     this.camera.lookAt(this._currentLookAt);
   }
 
