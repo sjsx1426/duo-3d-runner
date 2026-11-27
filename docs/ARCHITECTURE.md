@@ -88,3 +88,25 @@ This document describes the core 3D engine, character asset pipeline, player con
 - **Cycle Quality Tier:** `G`
 - **Toggle Shield Preview:** `B`
 - **Pause:** `P` or `Escape`
+
+---
+
+## 6. Verification & Automated Unit Tests (`tests/`)
+
+Run the full quality gate locally before opening or merging PRs:
+
+```bash
+npm run lint
+npm run test:run
+npm run build
+```
+
+Current Track A Vitest suites (`tests/`):
+- `tests/SceneManager.test.js` — quality tiers, atmosphere presets, and recursive WebGL resource disposal
+- `tests/CameraController.test.js` — camera modes, trauma shake, FOV boost, and arena follow clamping
+- `tests/GameLoop.test.js` — delta clamping, pause/resume, and rolling FPS/entity telemetry
+- `tests/Player.test.js` — 3-lane runner physics, jump/double-jump, slide hitbox, dash cooldown, duo swap, shield i-frames, and 360° arena movement
+- `tests/InputManager.test.js` — keyboard rebinding, persistence, repeat guard, action buffering, touch swipes, and gamepad polling
+- `tests/EngineBootstrap.test.js` — `createEngine` bootstrap, headless DOM guard, `CharacterLoader` caching, and GLB normalization
+- `tests/PlayerControls.test.js` — `bindPlayerControls` wiring across Runner and Arena modes
+
