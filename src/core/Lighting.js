@@ -1,33 +1,71 @@
 import * as THREE from 'three';
 
 /**
+ * Biome lighting themes paired with SceneManager atmosphere presets.
+ */
+export const LIGHTING_THEMES = {
+  neonNight: {
+    skyColor: 0x9bc4ff,
+    groundColor: 0x1b2238,
+    hemisphereIntensity: 0.85,
+    keyColor: 0xffffff,
+    keyIntensity: 1.8,
+    rimColor: 0x38bdf8,
+    rimIntensity: 0.9,
+  },
+  sunsetCanyon: {
+    skyColor: 0xffb38a,
+    groundColor: 0x3b1d2e,
+    hemisphereIntensity: 0.95,
+    keyColor: 0xffd2a6,
+    keyIntensity: 2.0,
+    rimColor: 0xf472b6,
+    rimIntensity: 1.0,
+  },
+  cyberArena: {
+    skyColor: 0x67e8f9,
+    groundColor: 0x0f172a,
+    hemisphereIntensity: 0.9,
+    keyColor: 0xe0f2fe,
+    keyIntensity: 1.85,
+    rimColor: 0x22d3ee,
+    rimIntensity: 1.15,
+  },
+};
+
+/**
  * Sets up hemisphere fill, shadow-casting key sunlight, and rim lighting for the 3D runner.
  */
 export class Lighting {
   /**
    * @param {THREE.Scene} [scene]
    * @param {object} [options]
-   * @param {number} [options.skyColor=0x9bc4ff]
-   * @param {number} [options.groundColor=0x1b2238]
-   * @param {number} [options.hemisphereIntensity=0.85]
-   * @param {number} [options.keyColor=0xffffff]
-   * @param {number} [options.keyIntensity=1.8]
-   * @param {number} [options.rimColor=0x38bdf8]
-   * @param {number} [options.rimIntensity=0.9]
+   * @param {string} [options.theme='neonNight']
+   * @param {number} [options.skyColor]
+   * @param {number} [options.groundColor]
+   * @param {number} [options.hemisphereIntensity]
+   * @param {number} [options.keyColor]
+   * @param {number} [options.keyIntensity]
+   * @param {number} [options.rimColor]
+   * @param {number} [options.rimIntensity]
    * @param {number} [options.shadowMapSize=2048]
    */
   constructor(scene = null, options = {}) {
+    const themeName = LIGHTING_THEMES[options.theme] ? options.theme : 'neonNight';
+    const baseTheme = LIGHTING_THEMES[themeName];
+
     const {
-      skyColor = 0x9bc4ff,
-      groundColor = 0x1b2238,
-      hemisphereIntensity = 0.85,
-      keyColor = 0xffffff,
-      keyIntensity = 1.8,
-      rimColor = 0x38bdf8,
-      rimIntensity = 0.9,
+      skyColor = baseTheme.skyColor,
+      groundColor = baseTheme.groundColor,
+      hemisphereIntensity = baseTheme.hemisphereIntensity,
+      keyColor = baseTheme.keyColor,
+      keyIntensity = baseTheme.keyIntensity,
+      rimColor = baseTheme.rimColor,
+      rimIntensity = baseTheme.rimIntensity,
       shadowMapSize = 2048,
     } = options;
 
+    this._theme = themeName;
     this.group = new THREE.Group();
     this.group.name = 'LightingRig';
 
@@ -90,6 +128,35 @@ export class Lighting {
       z + this._rimOffset.z,
     );
     this.rimLight.target.position.set(x, y, z);
+  }
+
+  /**
+   * Applies a named biome lighting theme ('neonNight', 'sunsetCanyon', 'cyberArena').
+   * @param {string} themeName
+   */
+  setTheme(themeName) {
+    const theme = LIGHTING_THEMES[themeName];
+    if (!theme) {
+      return;
+    }
+
+    this._theme = themeName;
+    this.hemisphereLight.color.setHex(theme.skyColor);
+    this.hemisphereLight.groundColor.setHex(theme.groundColor);
+    this.keyLight.color.setHex(theme.keyColor);
+    this.rimLight.color.setHex(theme.rimColor);
+    this.setIntensities({
+      hemisphere: theme.hemisphereIntensity,
+      key: theme.keyIntensity,
+      rim: theme.rimIntensity,
+    });
+  }
+
+  /**
+   * @returns {string}
+   */
+  getTheme() {
+    return this._theme;
   }
 
   /**
