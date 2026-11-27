@@ -72,6 +72,9 @@ export class Player {
       swapCooldown = 0.35,
       maxLives = 3,
       invulnerabilityDuration = 1.5,
+      movementMode = 'runner',
+      arenaRadius = 14,
+      arenaMoveSpeed = 10,
       onLand = null,
       onSwap = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
@@ -97,6 +100,10 @@ export class Player {
     this.maxLives = maxLives;
     this.lives = maxLives;
     this.invulnerabilityDuration = invulnerabilityDuration;
+    this.movementMode = movementMode === 'arena' ? 'arena' : 'runner';
+    this.arenaRadius = arenaRadius;
+    this.arenaMoveSpeed = arenaMoveSpeed;
+    this._arenaInput = new THREE.Vector2(0, 0);
     this.onLand = onLand;
     this.onSwap = onSwap;
 
@@ -696,7 +703,48 @@ export class Player {
   }
 
   /**
-   * Advances lateral lane interpolation, jump gravity, slide timer, dash burst, and banking tilt.
+   * Switches between 3-lane endless runner movement and 360-degree arena movement.
+   * @param {'runner'|'arena'} mode
+   */
+  setMovementMode(mode) {
+    this.movementMode = mode === 'arena' ? 'arena' : 'runner';
+    if (this.movementMode === 'runner') {
+      this._arenaInput.set(0, 0);
+      this.group.position.z = 0;
+      this.group.rotation.y = 0;
+      this.velocity.z = 0;
+    }
+  }
+
+  /**
+   * @returns {'runner'|'arena'}
+   */
+  getMovementMode() {
+    return this.movementMode;
+  }
+
+  /**
+   * Sets the circular boundary radius used in arena movement mode.
+   * @param {number} radius
+   */
+  setArenaBounds(radius) {
+    this.arenaRadius = Math.max(2, radius);
+  }
+
+  /**
+   * Sets normalized 2D free-roam input vector for arena movement (x: right, z: backward/forward).
+   * @param {number} x
+   * @param {number} z
+   */
+  setMoveInput(x = 0, z = 0) {
+    this._arenaInput.set(x, z);
+    if (this._arenaInput.lengthSq() > 1) {
+      this._arenaInput.normalize();
+    }
+  }
+
+  /**
+   * Advances lateral/arena movement, jump gravity, slide timer, dash burst, and banking tilt.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
@@ -706,8 +754,39 @@ export class Player {
     const laneSpeed = this.isDashing ? this.laneSwitchSpeed * 1.5 : this.laneSwitchSpeed;
     const alpha = 1 - Math.exp(-laneSpeed * safeDt);
 
-    this.group.position.x += (targetX - prevX) * alpha;
-    this.velocity.x = safeDt > 0 ? (this.group.position.x - prevX) / safeDt : 0;
+    if (this.movementMode === 'arena') {
+      const moveSpeed =
+        this.arenaMoveSpeed * (this.isDashing ? this.dashSpeedMultiplier * 0.85 : 1);
+      const vx = this._arenaInput.x * moveSpeed;
+      const vz = this._arenaInput.y * moveSpeed;
+
+      this.group.position.x += vx * safeDt;
+      this.group.position.z += vz * safeDt;
+      this.velocity.x = vx;
+      this.velocity.z = vz;
+
+      const distSq =
+        this.group.position.x * this.group.position.x +
+        this.group.position.z * this.group.position.z;
+      const maxR = Math.max(1, this.arenaRadius - this.colliderSize.width * 0.5);
+      if (distSq > maxR * maxR) {
+        const dist = Math.sqrt(distSq);
+        this.group.position.x = (this.group.position.x / dist) * maxR;
+        this.group.position.z = (this.group.position.z / dist) * maxR;
+      }
+
+      if (this._arenaInput.lengthSq() > 0.01) {
+        const targetYaw = Math.atan2(-vx, -vz);
+        let deltaYaw = targetYaw - this.group.rotation.y;
+        while (deltaYaw > Math.PI) deltaYaw -= Math.PI * 2;
+        while (deltaYaw < -Math.PI) deltaYaw += Math.PI * 2;
+        this.group.rotation.y += deltaYaw * Math.min(1, safeDt * 12);
+      }
+    } else {
+      this.group.position.x += (targetX - prevX) * alpha;
+      this.velocity.x = safeDt > 0 ? (this.group.position.x - prevX) / safeDt : 0;
+      this.velocity.z = 0;
+    }
 
     if (this.isGrounded) {
       this._coyoteTimer = this.coyoteTime;
@@ -892,7 +971,9 @@ export class Player {
    */
   reset() {
     this.laneIndex = this._clampLaneIndex(Math.floor(this.lanes.length / 2));
-    this.group.position.set(this.getTargetX(), this.groundY, 0);
+    this.group.position.set(this.movementMode === 'arena' ? 0 : this.getTargetX(), this.groundY, 0);
+    this.group.rotation.y = 0;
+    this._arenaInput.set(0, 0);
     this.velocity.set(0, 0, 0);
     this.isGrounded = true;
     this.jumpsUsed = 0;
