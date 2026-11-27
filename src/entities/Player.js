@@ -150,6 +150,25 @@ export class Player {
     this.shieldMesh.visible = false;
     this.group.add(this.shieldMesh);
 
+    this.duoBoostActive = false;
+    this.trailGroup = new THREE.Group();
+    this.trailGroup.name = 'PlayerTrailFX';
+    this.group.add(this.trailGroup);
+    this._trailPool = [];
+    this._trailSpawnTimer = 0;
+    const trailGeo = new THREE.BoxGeometry(0.14, 0.14, 0.5);
+    for (let i = 0; i < 14; i += 1) {
+      const mat = new THREE.MeshBasicMaterial({
+        color: 0x38bdf8,
+        transparent: true,
+        opacity: 0.65,
+      });
+      const mesh = new THREE.Mesh(trailGeo, mat);
+      mesh.visible = false;
+      this.trailGroup.add(mesh);
+      this._trailPool.push({ mesh, life: 0, maxLife: 0.35, vx: 0, vy: 0 });
+    }
+
     this.velocity = new THREE.Vector3(0, 0, 0);
     this.model = null;
     this.partnerModel = null;
@@ -385,6 +404,73 @@ export class Player {
     this.setInvulnerable(this.invulnerabilityDuration);
     this.triggerHitAnimation(0.35);
     return { damaged: true, shielded: false, remainingLives: this.lives };
+  }
+
+  /**
+   * Toggles Duo Boost trail intensity.
+   * @param {boolean} active
+   */
+  setDuoBoost(active) {
+    this.duoBoostActive = Boolean(active);
+  }
+
+  /**
+   * Returns count of currently visible speed trail particles.
+   * @returns {number}
+   */
+  getActiveTrailCount() {
+    let count = 0;
+    for (const item of this._trailPool) {
+      if (item.mesh.visible) {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
+  /**
+   * @param {number} dt
+   * @private
+   */
+  _updateTrailFx(dt) {
+    const isBoosted = this.isDashing || this.duoBoostActive;
+    const spawnInterval = isBoosted ? 0.025 : 0.075;
+    const trailColor = this.activeCharacterId === 'char2' ? 0xf97316 : 0x38bdf8;
+
+    this._trailSpawnTimer += dt;
+    if (this._trailSpawnTimer >= spawnInterval) {
+      this._trailSpawnTimer = 0;
+      const slot = this._trailPool.find((p) => !p.mesh.visible);
+      if (slot) {
+        slot.life = isBoosted ? 0.42 : 0.26;
+        slot.maxLife = slot.life;
+        slot.vx = (Math.random() - 0.5) * 0.6;
+        slot.vy = Math.random() * 0.4;
+        slot.mesh.visible = true;
+        slot.mesh.material.color.setHex(trailColor);
+        slot.mesh.position.set((Math.random() - 0.5) * 0.42, 0.45 + Math.random() * 0.75, 0.35);
+        slot.mesh.scale.set(1, 1, isBoosted ? 1.8 : 1);
+      }
+    }
+
+    const driftSpeed = this.getEffectiveForwardSpeed() * 0.7;
+    for (const item of this._trailPool) {
+      if (!item.mesh.visible) {
+        continue;
+      }
+      item.life -= dt;
+      if (item.life <= 0) {
+        item.mesh.visible = false;
+        continue;
+      }
+      const ratio = item.life / item.maxLife;
+      item.mesh.position.x += item.vx * dt;
+      item.mesh.position.y += item.vy * dt;
+      item.mesh.position.z += driftSpeed * dt;
+      item.mesh.material.opacity = ratio * (isBoosted ? 0.85 : 0.45);
+      item.mesh.scale.x = ratio;
+      item.mesh.scale.y = ratio;
+    }
   }
 
   /**
@@ -693,6 +779,7 @@ export class Player {
 
     this._animTime += safeDt * (this.isDashing ? 1.55 : 1);
     this._updateAnimations(safeDt, prevX, targetX, alpha);
+    this._updateTrailFx(safeDt);
 
     if (this.partnerModel) {
       const targetPartnerX =
@@ -818,6 +905,12 @@ export class Player {
     this._animTime = 0;
     this.lives = this.maxLives;
     this._invulnTimer = 0;
+    this.duoBoostActive = false;
+    this._trailSpawnTimer = 0;
+    for (const item of this._trailPool) {
+      item.life = 0;
+      item.mesh.visible = false;
+    }
     this.clearShield();
     this.partnerGroup.position.copy(this.partnerOffset);
     this._endSlide();
