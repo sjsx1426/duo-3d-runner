@@ -34,6 +34,9 @@ export class Player {
       slideDuration = 0.6,
       slideHeightRatio = 0.48,
       fastFallVelocity = -18,
+      dashDuration = 0.25,
+      dashCooldown = 1.6,
+      dashSpeedMultiplier = 1.85,
       onLand = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
     } = options;
@@ -51,6 +54,9 @@ export class Player {
     this.slideDuration = slideDuration;
     this.slideHeightRatio = slideHeightRatio;
     this.fastFallVelocity = fastFallVelocity;
+    this.dashDuration = dashDuration;
+    this.dashCooldown = dashCooldown;
+    this.dashSpeedMultiplier = dashSpeedMultiplier;
     this.onLand = onLand;
 
     this.isGrounded = true;
@@ -59,6 +65,9 @@ export class Player {
     this.isSliding = false;
     this._slideTimer = 0;
     this._pendingSlideOnLand = false;
+    this.isDashing = false;
+    this._dashTimer = 0;
+    this._dashCooldownTimer = 0;
 
     this._baseColliderHeight = colliderSize.height ?? PLAYER_COLLIDER_DEFAULTS.height;
     this.colliderSize = {
@@ -224,6 +233,49 @@ export class Player {
   }
 
   /**
+   * Triggers a short speed/invulnerability dash burst, optionally shifting a lane.
+   * @param {number} [direction=0] Negative for left lane dash, positive for right, 0 for forward dash
+   * @returns {boolean} True if dash triggered
+   */
+  dash(direction = 0) {
+    if (this.isDashing || this._dashCooldownTimer > 0) {
+      return false;
+    }
+
+    if (direction < 0) {
+      this.moveLeft();
+    } else if (direction > 0) {
+      this.moveRight();
+    }
+
+    this.isDashing = true;
+    this._dashTimer = this.dashDuration;
+    this._dashCooldownTimer = this.dashCooldown;
+    return true;
+  }
+
+  /**
+   * Returns current forward speed factoring in any active dash burst.
+   * @returns {number}
+   */
+  getEffectiveForwardSpeed() {
+    return this.isDashing
+      ? this.forwardSpeed * this.dashSpeedMultiplier
+      : this.forwardSpeed;
+  }
+
+  /**
+   * Returns normalized dash readiness from 0 (just used) to 1 (ready).
+   * @returns {number}
+   */
+  getDashCooldownProgress() {
+    if (this.dashCooldown <= 0) {
+      return 1;
+    }
+    return 1 - Math.max(0, Math.min(1, this._dashCooldownTimer / this.dashCooldown));
+  }
+
+  /**
    * @private
    */
   _endSlide() {
@@ -234,14 +286,15 @@ export class Player {
   }
 
   /**
-   * Advances lateral lane interpolation, jump gravity, slide timer, and banking tilt.
+   * Advances lateral lane interpolation, jump gravity, slide timer, dash burst, and banking tilt.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
     const safeDt = Math.max(0, dt || 0);
     const targetX = this.getTargetX();
     const prevX = this.group.position.x;
-    const alpha = 1 - Math.exp(-this.laneSwitchSpeed * safeDt);
+    const laneSpeed = this.isDashing ? this.laneSwitchSpeed * 1.5 : this.laneSwitchSpeed;
+    const alpha = 1 - Math.exp(-laneSpeed * safeDt);
 
     this.group.position.x += (targetX - prevX) * alpha;
     this.velocity.x = safeDt > 0 ? (this.group.position.x - prevX) / safeDt : 0;
@@ -277,16 +330,29 @@ export class Player {
       }
     }
 
+    if (this.isDashing) {
+      this._dashTimer -= safeDt;
+      if (this._dashTimer <= 0) {
+        this.isDashing = false;
+        this._dashTimer = 0;
+      }
+    }
+    if (this._dashCooldownTimer > 0) {
+      this._dashCooldownTimer = Math.max(0, this._dashCooldownTimer - safeDt);
+    }
+
     if (this.model) {
       const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
       this.model.rotation.z += (targetBank - this.model.rotation.z) * alpha;
+      const targetPitch = this.isDashing ? -0.22 : 0;
+      this.model.rotation.x += (targetPitch - this.model.rotation.x) * Math.min(1, safeDt * 16);
       const targetScaleY = this.isSliding ? 0.55 : 1;
       this.model.scale.y += (targetScaleY - this.model.scale.y) * Math.min(1, safeDt * 18);
     }
   }
 
   /**
-   * Resets player position, jump state, slide state, and lane state to center spawn.
+   * Resets player position, jump, slide, dash, and lane state to center spawn.
    */
   reset() {
     this.laneIndex = this._clampLaneIndex(Math.floor(this.lanes.length / 2));
@@ -295,9 +361,12 @@ export class Player {
     this.isGrounded = true;
     this.jumpsUsed = 0;
     this._coyoteTimer = this.coyoteTime;
+    this.isDashing = false;
+    this._dashTimer = 0;
+    this._dashCooldownTimer = 0;
     this._endSlide();
     if (this.model) {
-      this.model.rotation.z = 0;
+      this.model.rotation.set(0, 0, 0);
       this.model.scale.y = 1;
     }
   }
