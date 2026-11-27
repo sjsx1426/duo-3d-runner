@@ -18,30 +18,45 @@ export class InputManager {
   /**
    * @param {object} [options]
    * @param {EventTarget|null} [options.target]
+   * @param {EventTarget|null} [options.touchTarget]
    * @param {Record<string, string[]>} [options.bindings]
    * @param {boolean} [options.ignoreRepeat=true]
    * @param {number} [options.bufferWindow=0.14]
    * @param {string[]} [options.bufferableActions]
+   * @param {number} [options.swipeThreshold=28]
+   * @param {number} [options.doubleTapWindowMs=280]
+   * @param {string} [options.doubleTapAction='dash']
    */
   constructor(options = {}) {
     const {
       target = typeof window !== 'undefined' ? window : null,
+      touchTarget = target,
       bindings = DEFAULT_BINDINGS,
       ignoreRepeat = true,
       bufferWindow = 0.14,
       bufferableActions = ['jump', 'slide', 'left', 'right', 'dash', 'swap'],
+      swipeThreshold = 28,
+      doubleTapWindowMs = 280,
+      doubleTapAction = 'dash',
     } = options;
 
     this.target = target;
+    this.touchTarget = touchTarget;
     this.ignoreRepeat = ignoreRepeat;
     this.bufferWindow = bufferWindow;
     this.bufferableActions = new Set(bufferableActions);
+    this.swipeThreshold = swipeThreshold;
+    this.doubleTapWindowMs = doubleTapWindowMs;
+    this.doubleTapAction = doubleTapAction;
     this.bindings = {};
     this._codeToAction = new Map();
     this._pressedCodes = new Set();
     this._pressedActions = new Set();
     this._listeners = new Map();
     this._actionBuffer = new Map();
+    this._touchStart = null;
+    this._swipeTriggered = false;
+    this._lastTapTimeMs = 0;
     this._disposed = false;
 
     this.setBindings(bindings);
@@ -49,11 +64,21 @@ export class InputManager {
     this._onKeyDown = (event) => this.handleKeyDown(event);
     this._onKeyUp = (event) => this.handleKeyUp(event);
     this._onBlur = () => this.clearPressed();
+    this._onTouchStart = (event) => this.handleTouchStart(event);
+    this._onTouchMove = (event) => this.handleTouchMove(event);
+    this._onTouchEnd = (event) => this.handleTouchEnd(event);
 
     if (this.target && typeof this.target.addEventListener === 'function') {
       this.target.addEventListener('keydown', this._onKeyDown);
       this.target.addEventListener('keyup', this._onKeyUp);
       this.target.addEventListener('blur', this._onBlur);
+    }
+
+    if (this.touchTarget && typeof this.touchTarget.addEventListener === 'function') {
+      this.touchTarget.addEventListener('touchstart', this._onTouchStart, { passive: true });
+      this.touchTarget.addEventListener('touchmove', this._onTouchMove, { passive: true });
+      this.touchTarget.addEventListener('touchend', this._onTouchEnd, { passive: true });
+      this.touchTarget.addEventListener('touchcancel', this._onTouchEnd, { passive: true });
     }
   }
 
@@ -217,6 +242,93 @@ export class InputManager {
   }
 
   /**
+   * Records initial touch coordinates (and triggers duo swap on two-finger tap).
+   * @param {{touches?: ArrayLike<{clientX: number, clientY: number}>, timeStamp?: number}} event
+   */
+  handleTouchStart(event) {
+    if (this._disposed || !event?.touches || event.touches.length === 0) {
+      return;
+    }
+
+    if (event.touches.length === 2) {
+      this._swipeTriggered = true;
+      this.emit('swap', { source: 'touch-two-finger' });
+      return;
+    }
+
+    const touch = event.touches[0];
+    this._touchStart = {
+      x: touch.clientX,
+      y: touch.clientY,
+      timeMs: typeof event.timeStamp === 'number' ? event.timeStamp : Date.now(),
+    };
+    this._swipeTriggered = false;
+  }
+
+  /**
+   * Detects directional swipe gestures across horizontal/vertical thresholds.
+   * @param {{touches?: ArrayLike<{clientX: number, clientY: number}>}} event
+   */
+  handleTouchMove(event) {
+    if (
+      this._disposed ||
+      !this._touchStart ||
+      this._swipeTriggered ||
+      !event?.touches ||
+      event.touches.length === 0
+    ) {
+      return;
+    }
+
+    const touch = event.touches[0];
+    const dx = touch.clientX - this._touchStart.x;
+    const dy = touch.clientY - this._touchStart.y;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (Math.max(absX, absY) < this.swipeThreshold) {
+      return;
+    }
+
+    this._swipeTriggered = true;
+    if (absX >= absY) {
+      this.emit(dx < 0 ? 'left' : 'right', { source: 'touch-swipe', dx, dy });
+    } else {
+      this.emit(dy < 0 ? 'jump' : 'slide', { source: 'touch-swipe', dx, dy });
+    }
+  }
+
+  /**
+   * Completes touch gesture and detects double-tap dash triggers.
+   * @param {{changedTouches?: ArrayLike<{clientX: number, clientY: number}>, timeStamp?: number}} event
+   */
+  handleTouchEnd(event) {
+    if (this._disposed) {
+      return;
+    }
+
+    if (this._touchStart && !this._swipeTriggered) {
+      const endTouch = event?.changedTouches?.[0];
+      const dx = endTouch ? endTouch.clientX - this._touchStart.x : 0;
+      const dy = endTouch ? endTouch.clientY - this._touchStart.y : 0;
+      const moved = Math.hypot(dx, dy);
+
+      if (moved < 18) {
+        const nowMs = typeof event?.timeStamp === 'number' ? event.timeStamp : Date.now();
+        if (this._lastTapTimeMs > 0 && nowMs - this._lastTapTimeMs <= this.doubleTapWindowMs) {
+          this._lastTapTimeMs = 0;
+          this.emit(this.doubleTapAction, { source: 'touch-double-tap' });
+        } else {
+          this._lastTapTimeMs = nowMs;
+        }
+      }
+    }
+
+    this._touchStart = null;
+    this._swipeTriggered = false;
+  }
+
+  /**
    * Returns true while any key mapped to the given action is held down.
    * @param {string} action
    * @returns {boolean}
@@ -247,6 +359,13 @@ export class InputManager {
       this.target.removeEventListener('keydown', this._onKeyDown);
       this.target.removeEventListener('keyup', this._onKeyUp);
       this.target.removeEventListener('blur', this._onBlur);
+    }
+
+    if (this.touchTarget && typeof this.touchTarget.removeEventListener === 'function') {
+      this.touchTarget.removeEventListener('touchstart', this._onTouchStart);
+      this.touchTarget.removeEventListener('touchmove', this._onTouchMove);
+      this.touchTarget.removeEventListener('touchend', this._onTouchEnd);
+      this.touchTarget.removeEventListener('touchcancel', this._onTouchEnd);
     }
 
     this.clearPressed();
