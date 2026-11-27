@@ -25,6 +25,13 @@ export class Player {
       laneIndex = 1,
       laneSwitchSpeed = 14,
       forwardSpeed = 14,
+      jumpForce = 11.5,
+      doubleJumpForce = 10,
+      gravity = 28,
+      maxJumps = 2,
+      coyoteTime = 0.1,
+      groundY = 0,
+      onLand = null,
       colliderSize = PLAYER_COLLIDER_DEFAULTS,
     } = options;
 
@@ -32,6 +39,17 @@ export class Player {
     this.laneIndex = this._clampLaneIndex(laneIndex);
     this.laneSwitchSpeed = laneSwitchSpeed;
     this.forwardSpeed = forwardSpeed;
+    this.jumpForce = jumpForce;
+    this.doubleJumpForce = doubleJumpForce;
+    this.gravity = gravity;
+    this.maxJumps = maxJumps;
+    this.coyoteTime = coyoteTime;
+    this.groundY = groundY;
+    this.onLand = onLand;
+
+    this.isGrounded = true;
+    this.jumpsUsed = 0;
+    this._coyoteTimer = 0;
 
     this.colliderSize = {
       width: colliderSize.width ?? PLAYER_COLLIDER_DEFAULTS.width,
@@ -151,7 +169,30 @@ export class Player {
   }
 
   /**
-   * Advances lateral lane interpolation and banking tilt.
+   * Triggers a primary jump (including coyote window) or an aerial double-jump.
+   * @returns {boolean} True if a jump was executed
+   */
+  jump() {
+    const canCoyoteJump = !this.isGrounded && this.jumpsUsed === 0 && this._coyoteTimer > 0;
+    if (this.isGrounded || canCoyoteJump) {
+      this.velocity.y = this.jumpForce;
+      this.isGrounded = false;
+      this.jumpsUsed = 1;
+      this._coyoteTimer = 0;
+      return true;
+    }
+
+    if (this.jumpsUsed < this.maxJumps) {
+      this.velocity.y = this.doubleJumpForce;
+      this.jumpsUsed += 1;
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Advances lateral lane interpolation, jump gravity, and banking tilt.
    * @param {number} dt Delta time in seconds
    */
   update(dt) {
@@ -163,6 +204,26 @@ export class Player {
     this.group.position.x += (targetX - prevX) * alpha;
     this.velocity.x = safeDt > 0 ? (this.group.position.x - prevX) / safeDt : 0;
 
+    if (this.isGrounded) {
+      this._coyoteTimer = this.coyoteTime;
+    } else {
+      this._coyoteTimer = Math.max(0, this._coyoteTimer - safeDt);
+      this.velocity.y -= this.gravity * safeDt;
+      this.group.position.y += this.velocity.y * safeDt;
+
+      if (this.group.position.y <= this.groundY) {
+        this.group.position.y = this.groundY;
+        const impactVelocity = Math.abs(this.velocity.y);
+        this.velocity.y = 0;
+        this.isGrounded = true;
+        this.jumpsUsed = 0;
+        this._coyoteTimer = this.coyoteTime;
+        if (typeof this.onLand === 'function') {
+          this.onLand(impactVelocity);
+        }
+      }
+    }
+
     if (this.model) {
       const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
       this.model.rotation.z += (targetBank - this.model.rotation.z) * alpha;
@@ -170,12 +231,15 @@ export class Player {
   }
 
   /**
-   * Resets player position and lane state to center spawn.
+   * Resets player position, jump state, and lane state to center spawn.
    */
   reset() {
     this.laneIndex = this._clampLaneIndex(Math.floor(this.lanes.length / 2));
-    this.group.position.set(this.getTargetX(), 0, 0);
+    this.group.position.set(this.getTargetX(), this.groundY, 0);
     this.velocity.set(0, 0, 0);
+    this.isGrounded = true;
+    this.jumpsUsed = 0;
+    this._coyoteTimer = this.coyoteTime;
     if (this.model) {
       this.model.rotation.z = 0;
     }
