@@ -38,11 +38,97 @@ function enableShadows(root) {
 }
 
 /**
+ * Builds a stylized cyber-runner procedural 3D avatar for Character 1 when char1.glb is absent.
+ * Feet rest at y = 0 and articulated joints are exposed via group.userData.joints.
+ * @returns {THREE.Group}
+ */
+export function createProceduralChar1() {
+  const root = new THREE.Group();
+  root.name = 'Procedural_char1';
+
+  const armorMat = new THREE.MeshStandardMaterial({
+    color: 0x0ea5e9,
+    roughness: 0.35,
+    metalness: 0.45,
+  });
+  const suitMat = new THREE.MeshStandardMaterial({
+    color: 0x0f172a,
+    roughness: 0.65,
+    metalness: 0.2,
+  });
+  const visorMat = new THREE.MeshStandardMaterial({
+    color: 0x67e8f9,
+    emissive: 0x22d3ee,
+    emissiveIntensity: 1.4,
+    roughness: 0.2,
+    metalness: 0.1,
+  });
+
+  const torso = new THREE.Group();
+  torso.position.y = 1.05;
+
+  const chest = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.62, 0.32), armorMat);
+  const core = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.22, 0.35), visorMat);
+  core.position.y = 0.06;
+  const pack = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.4, 0.16), suitMat);
+  pack.position.set(0, 0.04, 0.22);
+  const thruster = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.11, 0.14, 12), visorMat);
+  thruster.rotation.x = Math.PI / 2;
+  thruster.position.set(0, -0.05, 0.31);
+  torso.add(chest, core, pack, thruster);
+
+  const head = new THREE.Group();
+  head.position.y = 0.48;
+  const helmet = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.36, 0.36), armorMat);
+  const visor = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.12, 0.08), visorMat);
+  visor.position.set(0, 0.02, -0.17);
+  head.add(helmet, visor);
+  torso.add(head);
+
+  const createLimb = (width, height, depth, material, pivotOffsetY) => {
+    const pivot = new THREE.Group();
+    const mesh = new THREE.Mesh(new THREE.BoxGeometry(width, height, depth), material);
+    mesh.position.y = pivotOffsetY;
+    pivot.add(mesh);
+    return pivot;
+  };
+
+  const leftArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
+  leftArm.position.set(-0.39, 0.22, 0);
+  const rightArm = createLimb(0.16, 0.52, 0.16, suitMat, -0.22);
+  rightArm.position.set(0.39, 0.22, 0);
+  torso.add(leftArm, rightArm);
+
+  const leftLeg = createLimb(0.2, 0.68, 0.22, suitMat, -0.34);
+  leftLeg.position.set(-0.15, 0.72, 0);
+  const rightLeg = createLimb(0.2, 0.68, 0.22, suitMat, -0.34);
+  rightLeg.position.set(0.15, 0.72, 0);
+
+  const leftBoot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.32), armorMat);
+  leftBoot.position.set(0, -0.65, -0.04);
+  leftLeg.add(leftBoot);
+
+  const rightBoot = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.14, 0.32), armorMat);
+  rightBoot.position.set(0, -0.65, -0.04);
+  rightLeg.add(rightBoot);
+
+  root.add(torso, leftLeg, rightLeg);
+  root.userData.joints = { torso, head, leftArm, rightArm, leftLeg, rightLeg };
+
+  enableShadows(root);
+  return root;
+}
+
+/**
  * Minimal neutral fallback mesh used before character-specific procedural avatars are registered.
  * @param {string} characterId
  * @returns {THREE.Group}
  */
 function createMinimalFallback(characterId) {
+  if (characterId === 'char1') {
+    return createProceduralChar1();
+  }
+
   const group = new THREE.Group();
   group.name = `Fallback_${characterId}`;
 
