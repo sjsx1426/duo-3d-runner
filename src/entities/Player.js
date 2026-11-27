@@ -104,6 +104,12 @@ export class Player {
     this.activeCharacterId = activeCharacterId;
     this.partnerCharacterId = activeCharacterId === 'char1' ? 'char2' : 'char1';
     this._duoModels = {};
+    this._duoAnimations = {};
+    this._mixer = null;
+    this._partnerMixer = null;
+    this._activeClipName = null;
+    this._animTime = 0;
+    this._hitAnimTimer = 0;
   }
 
   /**
@@ -121,10 +127,16 @@ export class Player {
   }
 
   /**
-   * Attaches a loaded or procedural 3D model to the active lead player container.
+   * Attaches a loaded or procedural 3D model and optional animation clips to the active lead player.
    * @param {THREE.Object3D|null} model
+   * @param {THREE.AnimationClip[]} [animations=[]]
    */
-  setModel(model) {
+  setModel(model, animations = []) {
+    if (this._mixer) {
+      this._mixer.stopAllAction();
+      this._mixer = null;
+      this._activeClipName = null;
+    }
     if (this.model && this.model.parent === this.group) {
       this.group.remove(this.model);
     }
@@ -134,14 +146,22 @@ export class Player {
       this.model.rotation.set(0, 0, 0);
       this.model.scale.set(1, 1, 1);
       this.group.add(this.model);
+      if (Array.isArray(animations) && animations.length > 0) {
+        this._mixer = new THREE.AnimationMixer(this.model);
+      }
     }
   }
 
   /**
    * Attaches the duo partner companion model inside the trailing partner group.
    * @param {THREE.Object3D|null} model
+   * @param {THREE.AnimationClip[]} [animations=[]]
    */
-  setPartnerModel(model) {
+  setPartnerModel(model, animations = []) {
+    if (this._partnerMixer) {
+      this._partnerMixer.stopAllAction();
+      this._partnerMixer = null;
+    }
     if (this.partnerModel && this.partnerModel.parent === this.partnerGroup) {
       this.partnerGroup.remove(this.partnerModel);
     }
@@ -151,16 +171,25 @@ export class Player {
       this.partnerModel.rotation.set(0, 0, 0);
       this.partnerModel.scale.set(1, 1, 1);
       this.partnerGroup.add(this.partnerModel);
+      if (Array.isArray(animations) && animations.length > 0) {
+        this._partnerMixer = new THREE.AnimationMixer(this.partnerModel);
+        const runClip = animations[0];
+        if (runClip) {
+          this._partnerMixer.clipAction(runClip).play();
+        }
+      }
     }
   }
 
   /**
-   * Registers both duo character models and mounts the lead + trailing companion.
+   * Registers both duo character models (and optional animation clip arrays) and mounts lead + partner.
    * @param {{char1?: THREE.Object3D, char2?: THREE.Object3D}} models
    * @param {string} [primaryId='char1']
+   * @param {{char1?: THREE.AnimationClip[], char2?: THREE.AnimationClip[]}} [animationsMap={}]
    */
-  setDuoModels(models = {}, primaryId = 'char1') {
+  setDuoModels(models = {}, primaryId = 'char1', animationsMap = {}) {
     this._duoModels = { ...models };
+    this._duoAnimations = { ...animationsMap };
     const ids = Object.keys(this._duoModels).filter((id) => Boolean(this._duoModels[id]));
     if (ids.length === 0) {
       return;
@@ -171,8 +200,11 @@ export class Player {
 
     this.activeCharacterId = activeId;
     this.partnerCharacterId = partnerId;
-    this.setModel(this._duoModels[activeId] || null);
-    this.setPartnerModel(partnerId ? this._duoModels[partnerId] : null);
+    this.setModel(this._duoModels[activeId] || null, this._duoAnimations[activeId] || []);
+    this.setPartnerModel(
+      partnerId ? this._duoModels[partnerId] : null,
+      partnerId ? this._duoAnimations[partnerId] || [] : [],
+    );
   }
 
   /**
@@ -193,14 +225,42 @@ export class Player {
     this.activeCharacterId = this.partnerCharacterId;
     this.partnerCharacterId = prevActive;
 
-    this.setModel(nextLeadModel);
-    this.setPartnerModel(nextPartnerModel);
+    this.setModel(nextLeadModel, this._duoAnimations[this.activeCharacterId] || []);
+    this.setPartnerModel(nextPartnerModel, this._duoAnimations[this.partnerCharacterId] || []);
     this._swapCooldownTimer = this.swapCooldown;
 
     if (typeof this.onSwap === 'function') {
       this.onSwap(this.activeCharacterId, this.partnerCharacterId);
     }
     return true;
+  }
+
+  /**
+   * Triggers a brief hit recoil animation state.
+   * @param {number} [duration=0.35]
+   */
+  triggerHitAnimation(duration = 0.35) {
+    this._hitAnimTimer = Math.max(this._hitAnimTimer, duration);
+  }
+
+  /**
+   * Returns current semantic animation state.
+   * @returns {'hit'|'slide'|'jump'|'dash'|'run'}
+   */
+  getAnimationState() {
+    if (this._hitAnimTimer > 0) {
+      return 'hit';
+    }
+    if (this.isSliding) {
+      return 'slide';
+    }
+    if (!this.isGrounded) {
+      return 'jump';
+    }
+    if (this.isDashing) {
+      return 'dash';
+    }
+    return 'run';
   }
 
   /**
@@ -455,15 +515,12 @@ export class Player {
     if (this._swapCooldownTimer > 0) {
       this._swapCooldownTimer = Math.max(0, this._swapCooldownTimer - safeDt);
     }
-
-    if (this.model) {
-      const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
-      this.model.rotation.z += (targetBank - this.model.rotation.z) * alpha;
-      const targetPitch = this.isDashing ? -0.22 : 0;
-      this.model.rotation.x += (targetPitch - this.model.rotation.x) * Math.min(1, safeDt * 16);
-      const targetScaleY = this.isSliding ? 0.55 : 1;
-      this.model.scale.y += (targetScaleY - this.model.scale.y) * Math.min(1, safeDt * 18);
+    if (this._hitAnimTimer > 0) {
+      this._hitAnimTimer = Math.max(0, this._hitAnimTimer - safeDt);
     }
+
+    this._animTime += safeDt * (this.isDashing ? 1.55 : 1);
+    this._updateAnimations(safeDt, prevX, targetX, alpha);
 
     if (this.partnerModel) {
       const targetPartnerX =
@@ -479,7 +536,100 @@ export class Player {
   }
 
   /**
-   * Resets player position, jump, slide, dash, and lane state to center spawn.
+   * Drives GLTF AnimationMixer clips when present or procedural joint animations otherwise.
+   * @param {number} dt
+   * @param {number} prevX
+   * @param {number} targetX
+   * @param {number} alpha
+   * @private
+   */
+  _updateAnimations(dt, prevX, targetX, alpha) {
+    const animState = this.getAnimationState();
+
+    if (this._mixer) {
+      const clips = this._duoAnimations[this.activeCharacterId] || [];
+      if (clips.length > 0 && this._activeClipName !== animState) {
+        const clip =
+          THREE.AnimationClip.findByName(clips, animState) ||
+          THREE.AnimationClip.findByName(clips, 'run') ||
+          clips[0];
+        if (clip) {
+          this._mixer.stopAllAction();
+          this._mixer.clipAction(clip).play();
+          this._activeClipName = animState;
+        }
+      }
+      this._mixer.update(dt);
+    }
+    if (this._partnerMixer) {
+      this._partnerMixer.update(dt);
+    }
+
+    if (this.model) {
+      const targetBank = THREE.MathUtils.clamp((prevX - targetX) * 0.08, -0.25, 0.25);
+      this.model.rotation.z += (targetBank - this.model.rotation.z) * alpha;
+      const targetPitch = animState === 'hit' ? 0.35 : this.isDashing ? -0.22 : 0;
+      this.model.rotation.x += (targetPitch - this.model.rotation.x) * Math.min(1, dt * 16);
+      const targetScaleY = this.isSliding ? 0.55 : 1;
+      this.model.scale.y += (targetScaleY - this.model.scale.y) * Math.min(1, dt * 18);
+
+      this._animateProceduralJoints(this.model, animState, 0);
+    }
+
+    if (this.partnerModel) {
+      this._animateProceduralJoints(this.partnerModel, 'run', 0.85);
+    }
+  }
+
+  /**
+   * Applies pose/stride rotations to procedural avatar joints.
+   * @param {THREE.Object3D} model
+   * @param {'hit'|'slide'|'jump'|'dash'|'run'} state
+   * @param {number} phaseOffset
+   * @private
+   */
+  _animateProceduralJoints(model, state, phaseOffset) {
+    const joints = model?.userData?.joints;
+    if (!joints) {
+      return;
+    }
+
+    if (state === 'jump') {
+      joints.leftLeg.rotation.x = 0.55;
+      joints.rightLeg.rotation.x = -0.35;
+      joints.leftArm.rotation.x = -0.8;
+      joints.rightArm.rotation.x = -0.65;
+      joints.torso.rotation.x = -0.1;
+      return;
+    }
+
+    if (state === 'slide') {
+      joints.leftLeg.rotation.x = -1.1;
+      joints.rightLeg.rotation.x = -0.85;
+      joints.leftArm.rotation.x = 0.65;
+      joints.rightArm.rotation.x = 0.65;
+      joints.torso.rotation.x = 0.45;
+      return;
+    }
+
+    if (state === 'hit') {
+      joints.torso.rotation.x = 0.35;
+      joints.leftArm.rotation.x = -0.9;
+      joints.rightArm.rotation.x = -0.9;
+      return;
+    }
+
+    const stride = Math.sin(this._animTime * 12 + phaseOffset);
+    joints.leftLeg.rotation.x = stride * 0.78;
+    joints.rightLeg.rotation.x = -stride * 0.78;
+    joints.leftArm.rotation.x = -stride * 0.68;
+    joints.rightArm.rotation.x = stride * 0.68;
+    joints.torso.rotation.x = state === 'dash' ? -0.18 : -0.05;
+    joints.torso.position.y = 1.05 + Math.abs(Math.cos(this._animTime * 12 + phaseOffset)) * 0.06;
+  }
+
+  /**
+   * Resets player position, jump, slide, dash, and animation state to center spawn.
    */
   reset() {
     this.laneIndex = this._clampLaneIndex(Math.floor(this.lanes.length / 2));
@@ -492,6 +642,8 @@ export class Player {
     this._dashTimer = 0;
     this._dashCooldownTimer = 0;
     this._swapCooldownTimer = 0;
+    this._hitAnimTimer = 0;
+    this._animTime = 0;
     this.partnerGroup.position.copy(this.partnerOffset);
     this._endSlide();
     if (this.model) {
