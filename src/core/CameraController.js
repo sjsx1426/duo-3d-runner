@@ -1,6 +1,30 @@
 import * as THREE from 'three';
 
 /**
+ * Named camera view presets for Runner, Arena, and Character Showcase views.
+ */
+export const CAMERA_MODES = {
+  runner: {
+    offset: { x: 0, y: 5.5, z: 10 },
+    lookOffset: { x: 0, y: 1.5, z: -6 },
+    fov: 60,
+    followDamping: 8,
+  },
+  arena: {
+    offset: { x: 0, y: 12.5, z: 14 },
+    lookOffset: { x: 0, y: 0.8, z: 0 },
+    fov: 55,
+    followDamping: 6,
+  },
+  showcase: {
+    offset: { x: 0, y: 2.3, z: 5.2 },
+    lookOffset: { x: 0, y: 1.1, z: 0 },
+    fov: 46,
+    followDamping: 8,
+  },
+};
+
+/**
  * Controls the PerspectiveCamera with smooth damped chase-following and resize handling.
  */
 export class CameraController {
@@ -13,23 +37,29 @@ export class CameraController {
    * @param {THREE.Vector3|{x:number,y:number,z:number}} [options.offset]
    * @param {THREE.Vector3|{x:number,y:number,z:number}} [options.lookOffset]
    * @param {number} [options.followDamping=8]
+   * @param {string} [options.mode='runner']
    */
   constructor(options = {}) {
+    const modePreset = CAMERA_MODES[options.mode] || CAMERA_MODES.runner;
     const {
-      fov = 60,
+      fov = modePreset.fov,
       aspect = typeof window !== 'undefined' && window.innerHeight > 0
         ? window.innerWidth / window.innerHeight
         : 16 / 9,
       near = 0.1,
       far = 250,
-      offset = { x: 0, y: 5.5, z: 10 },
-      lookOffset = { x: 0, y: 1.5, z: -6 },
-      followDamping = 8,
+      offset = modePreset.offset,
+      lookOffset = modePreset.lookOffset,
+      followDamping = modePreset.followDamping,
+      mode = 'runner',
     } = options;
 
+    this._mode = CAMERA_MODES[mode] ? mode : 'runner';
     this.camera = new THREE.PerspectiveCamera(fov, aspect, near, far);
     this.offset = new THREE.Vector3(offset.x, offset.y, offset.z);
     this.lookOffset = new THREE.Vector3(lookOffset.x, lookOffset.y, lookOffset.z);
+    this._targetOffset = new THREE.Vector3().copy(this.offset);
+    this._targetLookOffset = new THREE.Vector3().copy(this.lookOffset);
     this.followDamping = followDamping;
 
     this._basePosition = new THREE.Vector3().copy(this.offset);
@@ -125,6 +155,9 @@ export class CameraController {
     const safeDt = Math.max(0, dt || 0);
     const alpha = 1 - Math.exp(-this.followDamping * safeDt);
 
+    this.offset.lerp(this._targetOffset, alpha);
+    this.lookOffset.lerp(this._targetLookOffset, alpha);
+
     this._desiredPosition.set(
       pos.x + this.offset.x,
       pos.y + this.offset.y,
@@ -172,6 +205,43 @@ export class CameraController {
   }
 
   /**
+   * Switches between named camera presets ('runner', 'arena', 'showcase').
+   * @param {string} modeName
+   * @param {boolean} [snap=false]
+   */
+  setMode(modeName, snap = false) {
+    const preset = CAMERA_MODES[modeName];
+    if (!preset) {
+      return;
+    }
+
+    this._mode = modeName;
+    this._targetOffset.set(preset.offset.x, preset.offset.y, preset.offset.z);
+    this._targetLookOffset.set(
+      preset.lookOffset.x,
+      preset.lookOffset.y,
+      preset.lookOffset.z,
+    );
+    this.followDamping = preset.followDamping;
+    this.setBaseFov(preset.fov);
+
+    if (snap) {
+      this.offset.copy(this._targetOffset);
+      this.lookOffset.copy(this._targetLookOffset);
+      this.camera.fov = this._baseFov + this._fovBoost;
+      this.camera.updateProjectionMatrix();
+      this.snapTo();
+    }
+  }
+
+  /**
+   * @returns {string} Active camera mode name
+   */
+  getMode() {
+    return this._mode;
+  }
+
+  /**
    * Updates follow offsets at runtime.
    * @param {{x:number,y:number,z:number}} offset
    * @param {{x:number,y:number,z:number}} [lookOffset]
@@ -179,9 +249,11 @@ export class CameraController {
   setOffsets(offset, lookOffset) {
     if (offset) {
       this.offset.set(offset.x, offset.y, offset.z);
+      this._targetOffset.copy(this.offset);
     }
     if (lookOffset) {
       this.lookOffset.set(lookOffset.x, lookOffset.y, lookOffset.z);
+      this._targetLookOffset.copy(this.lookOffset);
     }
   }
 
